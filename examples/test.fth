@@ -1,9 +1,1 @@
-: abs
-    dup 0 < if
-        0 swap -
-    else
-    then
-;
-
--5 abs
-5 abs
+350 250 100 100 draw-rectangle

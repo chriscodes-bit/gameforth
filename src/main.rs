@@ -1,28 +1,42 @@
 mod dictionary;
+mod graphics;
 mod interpreter;
 mod lexer;
 mod stack;
 
-use interpreter::Interpreter;
-use std::{env, fs, process};
+use raylib::prelude::*;
 
 fn main() {
-    let path = env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("Usage: forth <file.fth>");
-        process::exit(1);
-    });
+    let source = std::fs::read_to_string("examples/test.fth").expect("Could not read Forth file");
 
-    let source = fs::read_to_string(&path).unwrap_or_else(|err| {
-        eprintln!("Could not read '{}': {}", path, err);
-        process::exit(1);
-    });
+    let mut interpreter = interpreter::Interpreter::new();
 
-    let mut interpreter = Interpreter::new();
+    let (mut rl, thread) = raylib::init().size(800, 600).title("GameForth").build();
 
-    if let Err(err) = interpreter.eval(&source) {
-        eprintln!("Forth error: {}", err);
-        process::exit(1);
+    rl.set_target_fps(60);
+
+    while !rl.window_should_close() {
+        interpreter.graphics.clear();
+
+        if let Err(err) = interpreter.eval(&source) {
+            eprintln!("Forth error: {}", err);
+            break;
+        }
+
+        let mut draw = rl.begin_drawing(&thread);
+        draw.clear_background(Color::new(24, 26, 36, 255));
+
+        for command in &interpreter.graphics.commands {
+            match command {
+                graphics::DrawCommand::Rectangle {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    draw.draw_rectangle(*x, *y, *width, *height, Color::GREEN);
+                }
+            }
+        }
     }
-
-    println!("Stack: {:?}", interpreter.stack);
 }

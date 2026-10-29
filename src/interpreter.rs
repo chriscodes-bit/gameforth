@@ -1,9 +1,11 @@
 use crate::dictionary::{Dictionary, Word};
+use crate::graphics::Graphics;
 use crate::lexer::{Token, tokenize};
 use crate::stack::Stack;
 
 pub struct Interpreter {
     pub stack: Stack,
+    pub graphics: Graphics,
     dictionary: Dictionary,
 }
 
@@ -11,6 +13,7 @@ impl Interpreter {
     pub fn new() -> Self {
         Self {
             stack: Stack::new(),
+            graphics: Graphics::new(),
             dictionary: Dictionary::new(),
         }
     }
@@ -49,6 +52,18 @@ impl Interpreter {
                     // Nothing to execute; this just marks the end of IF.
                 }
 
+                Token::Word(word) if word == "begin" => {
+                    // Marks the beginning of a loop.
+                }
+
+                Token::Word(word) if word == "until" => {
+                    let condition = self.stack.pop().ok_or("Stack underflow")?;
+
+                    if condition == 0 {
+                        let begin_index = find_matching_begin(tokens, pc)?;
+                        pc = begin_index;
+                    }
+                }
                 Token::Word(word) if word == ":" => {
                     let name = match tokens.get(pc + 1) {
                         Some(Token::Word(name)) => name.clone(),
@@ -76,7 +91,7 @@ impl Interpreter {
 
                 Token::Word(word) => match self.dictionary.find(word) {
                     Some(Word::Builtin(function)) => {
-                        function(&mut self.stack)?;
+                        function(&mut self.stack, &mut self.graphics)?;
                     }
                     Some(Word::UserDefined(body)) => {
                         self.execute_tokens(&body)?;
@@ -89,10 +104,10 @@ impl Interpreter {
                     }
                 },
             }
-            println!(
+            /*println!(
                 "PC: {}, Token: {:?}, Stack: {:?}",
                 pc, tokens[pc], self.stack
-            );
+            );*/
             pc += 1;
         }
 
@@ -127,4 +142,28 @@ fn find_conditional_boundaries(
     }
 
     Err("Missing then for if".to_string())
+}
+
+fn find_matching_begin(tokens: &[Token], until_index: usize) -> Result<usize, String> {
+    let mut depth = 0;
+
+    for index in (0..until_index).rev() {
+        match &tokens[index] {
+            Token::Word(word) if word == "until" => {
+                depth += 1;
+            }
+
+            Token::Word(word) if word == "begin" => {
+                if depth == 0 {
+                    return Ok(index);
+                }
+
+                depth -= 1;
+            }
+
+            _ => {}
+        }
+    }
+
+    Err("Missing begin for until".to_string())
 }
