@@ -28,6 +28,10 @@ impl Dictionary {
         dict.add("drop", drop_forth);
         dict.add("swap", swap_forth);
         dict.add("over", over);
+        dict.add("=", equal_forth);
+        dict.add("<", less_than_forth);
+        dict.add(">", greater_than_forth);
+        dict.add("0=", zero_equal_forth);
 
         dict
     }
@@ -90,16 +94,49 @@ fn drop_forth(stack: &mut Stack) -> Result<(), String> {
 }
 
 fn swap_forth(stack: &mut Stack) -> Result<(), String> {
-    let x = stack.pop().ok_or("Stack underflow")?;
-    let y = stack.pop().ok_or("Stack underflow")?;
+    let right = stack.pop().ok_or("Stack underflow")?;
+    let left = stack.pop().ok_or("Stack underflow")?;
 
-    stack.push(y);
-    stack.push(x);
+    stack.push(right);
+    stack.push(left);
+
     Ok(())
 }
 
 fn over(stack: &mut Stack) -> Result<(), String> {
     let value = *stack.second().ok_or("Stack underflow")?;
     stack.push(value);
+    Ok(())
+}
+
+fn equal_forth(stack: &mut Stack) -> Result<(), String> {
+    let x = stack.pop().ok_or("Stack underflow")?;
+    let y = stack.pop().ok_or("Stack underflow")?;
+
+    stack.push(if x == y { -1 } else { 0 });
+    Ok(())
+}
+
+fn less_than_forth(stack: &mut Stack) -> Result<(), String> {
+    let right = stack.pop().ok_or("Stack underflow")?;
+    let left = stack.pop().ok_or("Stack underflow")?;
+
+    stack.push(if left < right { -1 } else { 0 });
+    Ok(())
+}
+
+fn greater_than_forth(stack: &mut Stack) -> Result<(), String> {
+    let right = stack.pop().ok_or("Stack underflow")?;
+    let left = stack.pop().ok_or("Stack underflow")?;
+
+    stack.push(if left > right { -1 } else { 0 });
+    Ok(())
+}
+
+fn zero_equal_forth(stack: &mut Stack) -> Result<(), String> {
+    let value = stack.pop().ok_or("Stack underflow")?;
+
+    stack.push(if value == 0 { -1 } else { 0 });
+
     Ok(())
 }

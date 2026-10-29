@@ -20,20 +20,6 @@ impl Stack {
         self.data.last()
     }
 
-    /*fn dup(&mut self) -> bool {
-        match self.peek() {
-            Some(&x) => {
-                self.push(x);
-                true
-            }
-            None => false,
-        }
-    }*/
-
-    pub fn is_empty(self) -> bool {
-        self.data.is_empty()
-    }
-
     pub fn second(&self) -> Option<&i64> {
         if self.data.len() < 2 {
             None
