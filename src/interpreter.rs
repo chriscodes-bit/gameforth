@@ -24,29 +24,25 @@ impl Interpreter {
         let mut pc = 0;
 
         while pc < tokens.len() {
-            println!(
-                "PC: {}, Token: {:?}, Stack: {:?}",
-                pc, tokens[pc], self.stack
-            );
             match &tokens[pc] {
                 Token::Number(number) => {
                     self.stack.push(*number);
                 }
 
                 Token::Word(word) if word == "if" => {
-                    let then_index = find_matching_then(tokens, pc + 1)?;
+                    let (else_index, then_index) = find_conditional_boundaries(tokens, pc + 1)?;
 
                     let condition = self.stack.pop().ok_or("Stack underflow")?;
 
-                    println!("IF: condition = {}", condition);
-                    println!("IF: then_index = {}", then_index);
-
                     if condition == 0 {
-                        pc = then_index + 1;
-                        continue;
+                        pc = else_index.unwrap_or(then_index);
                     }
+                }
 
-                    println!("IF: executing true branch");
+                Token::Word(word) if word == "else" => {
+                    let (_, then_index) = find_conditional_boundaries(tokens, pc + 1)?;
+
+                    pc = then_index;
                 }
 
                 Token::Word(word) if word == "then" => {
@@ -83,7 +79,6 @@ impl Interpreter {
                         function(&mut self.stack)?;
                     }
                     Some(Word::UserDefined(body)) => {
-                        println!("Executing user word: {:?}", body);
                         self.execute_tokens(&body)?;
                     }
                     /*Some(Word::UserDefined(body)) => {
@@ -94,7 +89,10 @@ impl Interpreter {
                     }
                 },
             }
-
+            println!(
+                "PC: {}, Token: {:?}, Stack: {:?}",
+                pc, tokens[pc], self.stack
+            );
             pc += 1;
         }
 
@@ -102,21 +100,28 @@ impl Interpreter {
     }
 }
 
-fn find_matching_then(tokens: &[Token], start: usize) -> Result<usize, String> {
+fn find_conditional_boundaries(
+    tokens: &[Token],
+    start: usize,
+) -> Result<(Option<usize>, usize), String> {
     let mut depth = 0;
+    let mut else_index = None;
 
     for (index, token) in tokens.iter().enumerate().skip(start) {
         match token {
-            Token::Word(word) if word == "if" => {
-                depth += 1;
-            }
+            Token::Word(word) if word == "if" => depth += 1,
+
             Token::Word(word) if word == "then" => {
                 if depth == 0 {
-                    return Ok(index);
+                    return Ok((else_index, index));
                 }
-
                 depth -= 1;
             }
+
+            Token::Word(word) if word == "else" && depth == 0 => {
+                else_index = Some(index);
+            }
+
             _ => {}
         }
     }
