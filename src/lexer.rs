@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub enum Token {
     Number(i64),
     Word(String),

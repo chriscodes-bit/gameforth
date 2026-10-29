@@ -8,8 +8,13 @@ use interpreter::Interpreter;
 fn main() {
     let mut forth = Interpreter::new();
 
-    match forth.eval("10 3 - 2 *") {
-        Ok(()) => println!("Result: {:?}", forth.stack.peek()),
+    match forth.eval(
+        ": square dup * ; \
+         : double 2 * ; \
+         5 square \
+         3 double",
+    ) {
+        Ok(()) => println!("Stack: {:?}", forth.stack),
         Err(error) => println!("Error: {}", error),
     }
 }

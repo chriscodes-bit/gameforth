@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct Stack {
     data: Vec<i64>,
 }
@@ -31,5 +32,13 @@ impl Stack {
 
     pub fn is_empty(self) -> bool {
         self.data.is_empty()
+    }
+
+    pub fn second(&self) -> Option<&i64> {
+        if self.data.len() < 2 {
+            None
+        } else {
+            self.data.get(self.data.len() - 2)
+        }
     }
 }

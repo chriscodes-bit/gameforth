@@ -1,10 +1,17 @@
+use crate::lexer::Token;
 use crate::stack::Stack;
 use std::collections::HashMap;
 
-type Builtin = fn(&mut Stack) -> Result<(), String>;
+pub type Builtin = fn(&mut Stack) -> Result<(), String>;
+
+#[derive(Clone)]
+pub enum Word {
+    Builtin(Builtin),
+    UserDefined(Vec<Token>),
+}
 
 pub struct Dictionary {
-    words: HashMap<String, Builtin>,
+    words: HashMap<String, Word>,
 }
 
 impl Dictionary {
@@ -20,16 +27,21 @@ impl Dictionary {
         dict.add("dup", dup);
         dict.add("drop", drop_forth);
         dict.add("swap", swap_forth);
+        dict.add("over", over);
 
         dict
     }
 
     fn add(&mut self, name: &str, function: Builtin) {
-        self.words.insert(name.to_string(), function);
+        self.words.insert(name.to_string(), Word::Builtin(function));
     }
 
-    pub fn find(&self, name: &str) -> Option<Builtin> {
-        self.words.get(name).copied()
+    pub fn define(&mut self, name: &str, body: Vec<Token>) {
+        self.words.insert(name.to_string(), Word::UserDefined(body));
+    }
+
+    pub fn find(&self, name: &str) -> Option<Word> {
+        self.words.get(name).cloned()
     }
 }
 
@@ -80,7 +92,14 @@ fn drop_forth(stack: &mut Stack) -> Result<(), String> {
 fn swap_forth(stack: &mut Stack) -> Result<(), String> {
     let x = stack.pop().ok_or("Stack underflow")?;
     let y = stack.pop().ok_or("Stack underflow")?;
+
     stack.push(y);
     stack.push(x);
+    Ok(())
+}
+
+fn over(stack: &mut Stack) -> Result<(), String> {
+    let value = *stack.second().ok_or("Stack underflow")?;
+    stack.push(value);
     Ok(())
 }
