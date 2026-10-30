@@ -96,9 +96,9 @@ impl Interpreter {
                     Some(Word::UserDefined(body)) => {
                         self.execute_tokens(&body)?;
                     }
-                    /*Some(Word::UserDefined(body)) => {
-                        self.execute_tokens(&body)?;
-                    }*/
+                    Some(Word::Color(color)) => {
+                        self.graphics.set_color(color);
+                    }
                     None => {
                         return Err(format!("Unknown word: {}", word));
                     }

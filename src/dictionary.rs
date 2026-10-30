@@ -1,3 +1,5 @@
+use raylib::prelude::Color;
+
 use crate::graphics::Graphics;
 use crate::lexer::Token;
 use crate::stack::Stack;
@@ -9,6 +11,7 @@ pub type Builtin = fn(&mut Stack, &mut Graphics) -> Result<(), String>;
 pub enum Word {
     Builtin(Builtin),
     UserDefined(Vec<Token>),
+    Color(Color),
 }
 
 pub struct Dictionary {
@@ -40,12 +43,28 @@ impl Dictionary {
 
         // Graphics
         dict.add("draw-rectangle", draw_rectangle);
+        dict.add("draw-circle", draw_circle);
 
+        // Colors
+        dict.add_color("rl-red", Color::RED);
+        dict.add_color("rl-green", Color::GREEN);
+        dict.add_color("rl-blue", Color::BLUE);
+        dict.add_color("rl-white", Color::WHITE);
+        dict.add_color("rl-black", Color::BLACK);
+        dict.add_color("rl-yellow", Color::YELLOW);
+        dict.add_color("rl-orange", Color::ORANGE);
+        dict.add_color("rl-purple", Color::PURPLE);
+        dict.add_color("rl-pink", Color::PINK);
+        dict.add_color("rl-gray", Color::GRAY);
         dict
     }
 
     fn add(&mut self, name: &str, function: Builtin) {
         self.words.insert(name.to_string(), Word::Builtin(function));
+    }
+
+    fn add_color(&mut self, name: &str, color: Color) {
+        self.words.insert(name.to_string(), Word::Color(color));
     }
 
     pub fn define(&mut self, name: &str, body: Vec<Token>) {
@@ -173,6 +192,16 @@ fn draw_rectangle(stack: &mut Stack, graphics: &mut Graphics) -> Result<(), Stri
     let x = stack.pop().ok_or("Stack underflow")?;
 
     graphics.draw_rectangle(x as i32, y as i32, width as i32, height as i32);
+
+    Ok(())
+}
+
+fn draw_circle(stack: &mut Stack, graphics: &mut Graphics) -> Result<(), String> {
+    let radius = stack.pop().ok_or("Stack underflow")?;
+    let y = stack.pop().ok_or("Stack underflow")?;
+    let x = stack.pop().ok_or("Stack underflow")?;
+
+    graphics.draw_circle(x as i32, y as i32, radius as i32);
 
     Ok(())
 }

@@ -33,8 +33,18 @@ fn main() {
                     y,
                     width,
                     height,
+                    color,
                 } => {
-                    draw.draw_rectangle(*x, *y, *width, *height, Color::GREEN);
+                    draw.draw_rectangle(*x, *y, *width, *height, *color);
+                }
+
+                graphics::DrawCommand::Circle {
+                    x,
+                    y,
+                    radius,
+                    color,
+                } => {
+                    draw.draw_circle(*x, *y, *radius as f32, *color);
                 }
             }
         }
