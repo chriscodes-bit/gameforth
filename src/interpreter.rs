@@ -6,6 +6,7 @@ use crate::stack::Stack;
 pub struct Interpreter {
     pub stack: Stack,
     pub graphics: Graphics,
+    variables: Vec<i64>,
     dictionary: Dictionary,
 }
 
@@ -14,6 +15,7 @@ impl Interpreter {
         Self {
             stack: Stack::new(),
             graphics: Graphics::new(),
+            variables: Vec::new(),
             dictionary: Dictionary::new(),
         }
     }
@@ -89,6 +91,44 @@ impl Interpreter {
                     return Err("Unexpected ;".to_string());
                 }
 
+                Token::Word(word) if word == "variable" => {
+                    let name = match tokens.get(pc + 1) {
+                        Some(Token::Word(name)) => name.clone(),
+                        _ => return Err("Expected variable name after variable".to_string()),
+                    };
+
+                    // The source is evaluated every frame, so only allocate the
+                    // variable the first time it is seen.
+                    if !matches!(self.dictionary.find(&name), Some(Word::Variable(_))) {
+                        let address = self.variables.len();
+                        self.variables.push(0);
+                        self.dictionary.define_variable(&name, address);
+                    }
+
+                    pc += 1;
+                }
+
+                Token::Word(word) if word == "@" => {
+                    let address = self.stack.pop().ok_or("Stack underflow")?;
+                    let index = self.variable_index(address)?;
+                    let value = self.variables[index];
+                    self.stack.push(value);
+                }
+
+                Token::Word(word) if word == "!" => {
+                    let address = self.stack.pop().ok_or("Stack underflow")?;
+                    let value = self.stack.pop().ok_or("Stack underflow")?;
+                    let index = self.variable_index(address)?;
+                    self.variables[index] = value;
+                }
+
+                Token::Word(word) if word == "+!" => {
+                    let address = self.stack.pop().ok_or("Stack underflow")?;
+                    let value = self.stack.pop().ok_or("Stack underflow")?;
+                    let index = self.variable_index(address)?;
+                    self.variables[index] += value;
+                }
+
                 Token::Word(word) => match self.dictionary.find(word) {
                     Some(Word::Builtin(function)) => {
                         function(&mut self.stack, &mut self.graphics)?;
@@ -98,6 +138,9 @@ impl Interpreter {
                     }
                     Some(Word::Color(color)) => {
                         self.graphics.set_color(color);
+                    }
+                    Some(Word::Variable(address)) => {
+                        self.stack.push(address as i64);
                     }
                     None => {
                         return Err(format!("Unknown word: {}", word));
@@ -112,6 +155,74 @@ impl Interpreter {
         }
 
         Ok(())
+    }
+
+    fn variable_index(&self, address: i64) -> Result<usize, String> {
+        if address < 0 || address as usize >= self.variables.len() {
+            return Err(format!("Invalid variable address: {}", address));
+        }
+
+        Ok(address as usize)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variables_store_and_fetch() {
+        let mut interpreter = Interpreter::new();
+        interpreter.eval("variable x 42 x ! x @").unwrap();
+        assert_eq!(interpreter.stack.pop(), Some(42));
+    }
+
+    #[test]
+    fn variable_definitions_are_idempotent() {
+        let mut interpreter = Interpreter::new();
+        interpreter.eval("variable x 42 x !").unwrap();
+        interpreter.eval("variable x x @").unwrap();
+        assert_eq!(interpreter.stack.pop(), Some(42));
+    }
+
+    #[test]
+    fn plus_store_adds_to_variable() {
+        let mut interpreter = Interpreter::new();
+        interpreter.eval("variable x 10 x ! 5 x +! x @").unwrap();
+        assert_eq!(interpreter.stack.pop(), Some(15));
+    }
+
+    #[test]
+    fn invalid_variable_address_errors() {
+        let mut interpreter = Interpreter::new();
+        assert!(interpreter.eval("999 @").is_err());
+    }
+
+    #[test]
+    fn bounce_example_stays_on_screen() {
+        let source = std::fs::read_to_string("examples/test.fth").unwrap();
+        let mut interpreter = Interpreter::new();
+
+        for _ in 0..500 {
+            interpreter.graphics.clear();
+            interpreter.eval(&source).unwrap();
+
+            match interpreter.graphics.commands.last().unwrap() {
+                crate::graphics::DrawCommand::Rectangle {
+                    x,
+                    y,
+                    width,
+                    height,
+                    ..
+                } => {
+                    assert!((0..=700).contains(x));
+                    assert!((0..=500).contains(y));
+                    assert_eq!(*width, 100);
+                    assert_eq!(*height, 100);
+                }
+                _ => panic!("expected a rectangle"),
+            }
+        }
     }
 }
 

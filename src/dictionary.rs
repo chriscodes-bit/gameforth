@@ -12,6 +12,7 @@ pub enum Word {
     Builtin(Builtin),
     UserDefined(Vec<Token>),
     Color(Color),
+    Variable(usize),
 }
 
 pub struct Dictionary {
@@ -69,6 +70,10 @@ impl Dictionary {
 
     pub fn define(&mut self, name: &str, body: Vec<Token>) {
         self.words.insert(name.to_string(), Word::UserDefined(body));
+    }
+
+    pub fn define_variable(&mut self, name: &str, address: usize) {
+        self.words.insert(name.to_string(), Word::Variable(address));
     }
 
     pub fn find(&self, name: &str) -> Option<Word> {
