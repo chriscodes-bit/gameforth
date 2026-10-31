@@ -7,6 +7,7 @@ This page documents the programs that ship with the repository plus a few short 
 - [Running the examples](#running-the-examples)
 - [Bouncing rectangle](#bouncing-rectangle)
 - [Modular starfield demo](#modular-starfield-demo)
+- [Console language tour](#console-language-tour)
 - [How `include` composes the demo](#how-include-composes-the-demo)
 - [Fragments](#fragments)
 
@@ -15,8 +16,31 @@ This page documents the programs that ship with the repository plus a few short 
 ```sh
 cargo run                                        # examples/test.fth, windowed
 cargo run -- examples/demo/main.fth              # the demo, windowed
+cargo run -- examples/tour.fth --headless        # the language tour, console only
 cargo run -- --headless --frames 60 examples/test.fth
 ```
+
+## Console language tour
+
+`examples/tour.fth` is a complete language tour that uses **no graphics or game words at all** — it is all top-level code, so it runs once at load with no `init`/`update`/`draw`. Run it headless:
+
+```sh
+cargo run -- --headless examples/tour.fth
+```
+
+It exercises, in one self-checking run:
+
+- string literals and `emit`-based character output (`emit-digits`, a small recursion example)
+- arithmetic, bit operations, and integer `sqrt`
+- every stack word, demonstrated with `.s`
+- `value`/`to`, `variable`/`!`/`+!`
+- `do`/`loop`, `?do` vs `do`, `+loop` with a negative step, `leave`, nested `i`/`j`
+- recursion (`gcd`, `fib`, factorial) and `exit`
+- memory arrays (`create`/`allot`/`,`), a Sieve of Eratosthenes, and an in-place bubble sort
+- fixed-point math: `f*`, `f/`, `sin`, `f-sqrt`, mean/variance/stddev of a dataset
+- deterministic `random`/`random-seed` sequences
+
+The last section prints the final stack depth, which must be `0` — every fragment in the program is stack-balanced, so any imbalance fails the self-check.
 
 Anything can be pointed at any file:
 

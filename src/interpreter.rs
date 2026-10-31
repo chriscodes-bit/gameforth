@@ -490,6 +490,14 @@ impl Interpreter {
                 };
 
                 let flow = self.execute_compiled(current)?;
+
+                // A nested call that ends with `exit` returns from that
+                // invocation only; the current word keeps going.
+                let flow = match flow {
+                    Flow::Exit => Flow::Normal,
+                    flow => flow,
+                };
+
                 Ok(Step {
                     flow,
                     advance: true,
@@ -611,7 +619,15 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
             Some(Word::UserDefined(word)) => {
-                self.execute_word_with_frame(name, word, Some(token.location.clone()))
+                let flow =
+                    self.execute_word_with_frame(name, word, Some(token.location.clone()))?;
+
+                // `exit` inside a called word has already unwound that word's
+                // own body; for the caller it is just a normal return.
+                match flow {
+                    Flow::Exit => Ok(Flow::Normal),
+                    flow => Ok(flow),
+                }
             }
             Some(Word::Color(color)) => {
                 self.context.graphics.set_color(color);
@@ -844,6 +860,20 @@ mod tests {
 
         let mut interpreter = eval(": fact dup 1 > if dup 1 - recurse * else drop 1 then ; 5 fact");
         assert_eq!(interpreter.context.stack.pop(), Some(120));
+    }
+
+    #[test]
+    fn exit_is_contained_to_the_called_word() {
+        // `exit` inside a callee returns from that word only; tokens after
+        // the call still execute and the top-level program continues.
+        let mut interpreter = eval(": not-my-exit dup 0 = if exit then drop 99 ; 0 not-my-exit 42");
+        assert_eq!(interpreter.context.stack.pop(), Some(42));
+        assert_eq!(interpreter.context.stack.pop(), Some(0));
+
+        // `exit` in the base case of a recursive word stays in the base case
+        let mut interpreter =
+            eval(": fib dup 2 < if exit then dup 1 - recurse swap 2 - recurse + ; 10 fib");
+        assert_eq!(interpreter.context.stack.pop(), Some(55));
     }
 
     #[test]

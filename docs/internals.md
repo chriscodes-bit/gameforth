@@ -144,7 +144,7 @@ Flow propagation uses an enum:
 enum Flow { Normal, Exit, Leave }
 ```
 
-`exit` propagates as `Flow::Exit` and unwinds the current word; `leave` propagates until the frame's own loop stack entry is found, then jumps one past that loop's `loop` word. A `leave` with no loop in the same execution aborts as an error (`leave outside loop`), and `load`/`run_frame` turn a leaked `Leave` from a lifecycle word into a distinct error message.
+`exit` propagates as `Flow::Exit` and unwinds only the current word: `call_word` and the `recurse` arm map a callee's `Exit` to `Flow::Normal`, so the caller sees an ordinary return and tokens after the call keep running. Without that containment, an `exit` deep inside a recursive word would silently end the whole program. `leave` propagates until the frame's own loop stack entry is found, then jumps one past that loop's `loop` word. A `leave` with no loop in the same execution aborts as an error (`leave outside loop`), and `load`/`run_frame` turn a leaked `Leave` from a lifecycle word into a distinct error message.
 
 ### Loop state
 
