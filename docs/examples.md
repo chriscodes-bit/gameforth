@@ -1,340 +1,258 @@
 # Examples
 
-This page contains complete, runnable GameForth programs.
-
-The application always loads `examples/test.fth` at startup. To run one of these examples, replace the contents of `examples/test.fth` with the example and run:
-
-```powershell
-cargo run
-```
-
-None of the programs below use comments, because GameForth does not support them.
+This page documents the programs that ship with the repository plus a few short fragments worth stealing.
 
 ## Contents
 
-- [Static rectangle](#static-rectangle)
-- [Multiple shapes and colors](#multiple-shapes-and-colors)
-- [Defining and calling a word](#defining-and-calling-a-word)
-- [Conditionals](#conditionals)
-- [Nested conditionals](#nested-conditionals)
-- [Counting loop](#counting-loop)
-- [Variables and score](#variables-and-score)
-- [Moving rectangle with wrap](#moving-rectangle-with-wrap)
+- [Running the examples](#running-the-examples)
 - [Bouncing rectangle](#bouncing-rectangle)
-- [Multiple moving objects](#multiple-moving-objects)
-- [Useful arithmetic idioms](#useful-arithmetic-idioms)
+- [Modular starfield demo](#modular-starfield-demo)
+- [How `include` composes the demo](#how-include-composes-the-demo)
+- [Fragments](#fragments)
 
-## Static rectangle
+## Running the examples
 
-```forth
-350 250 100 100 rl-red draw-rectangle
+```sh
+cargo run                                        # examples/test.fth, windowed
+cargo run -- examples/demo/main.fth              # the demo, windowed
+cargo run -- --headless --frames 60 examples/test.fth
 ```
 
-Draws a filled red `100x100` rectangle with its top-left at `(350, 250)`.
+Anything can be pointed at any file:
 
-The rectangle is redrawn in the same place every frame.
-
-## Multiple shapes and colors
-
-```forth
-50 50 100 100 rl-red draw-rectangle
-200 50 100 100 rl-blue draw-rectangle
-50 200 50 rl-yellow draw-circle
-400 300 80 rl-purple draw-circle
+```sh
+gameforth path/to/program.fth
 ```
 
-This queues four shapes:
-
-- a red rectangle at `(50, 50)`
-- a blue rectangle at `(200, 50)`
-- a yellow circle centered at `(50, 200)`
-- a purple circle centered at `(400, 300)`
-
-The shapes are drawn in order, so later shapes appear on top of earlier ones.
-
-## Defining and calling a word
-
-```forth
-: square
-  dup *
-;
-
-: double
-  2 *
-;
-
-7 square .
-21 double .
-```
-
-Output:
-
-```text
-49
-42
-```
-
-`square` duplicates the top value and multiplies it by itself. `double` multiplies the top value by `2`.
-
-## Conditionals
-
-```forth
-10 5 > if
-  1 .
-else
-  0 .
-then
-```
-
-`10 5 >` produces `-1`, so the program prints `1`.
-
-```forth
-10 5 < if
-  1 .
-else
-  0 .
-then
-```
-
-`10 5 <` produces `0`, so the program prints `0`.
-
-## Nested conditionals
-
-```forth
-variable n
-7 n !
-
-n @ 5 > if
-  n @ 10 > if
-    2 .
-  else
-    1 .
-  then
-else
-  0 .
-then
-```
-
-`n` is `7`:
-
-- `7 > 5` is true, so the outer true branch runs.
-- `7 > 10` is false, so the inner false branch runs.
-- The program prints `1`.
-
-## Counting loop
-
-```forth
-variable n
-5 n !
-
-begin
-  n @ .
-  -1 n +!
-  n @ 0 <
-until
-```
-
-Output:
-
-```text
-5
-4
-3
-2
-1
-0
-```
-
-`until` loops while its condition is `0`. After `n` reaches `-1`, `n @ 0 <` produces `-1`, so the loop exits.
-
-## Variables and score
-
-```forth
-variable score
-0 score !
-10 score +!
-5 score +!
-score @ .
-```
-
-Output:
-
-```text
-15
-```
-
-`variable score` creates a cell initialized to `0`. `!` stores, `+!` adds, and `@` fetches.
-
-## Moving rectangle with wrap
-
-This program moves a rectangle to the right and wraps it back to the left edge when it reaches the right side.
-
-```forth
-variable x
-variable initialized
-
-initialized @ 0= if
-  0 x !
-  -1 initialized !
-then
-
-x @ 1 + x !
-
-x @ 700 > if
-  0 x !
-then
-
-x @ 250 100 100 rl-red draw-rectangle
-```
-
-How it works:
-
-1. On the first frame, `initialized` is `0`, so the initialization block sets `x` to `0` and marks `initialized` as true.
-2. `x @ 1 + x !` increments `x` by one.
-3. If `x` is greater than `700`, it is reset to `0`.
-4. The rectangle is drawn at the new `x`.
-
-The valid x range for a 100-pixel-wide rectangle is `0..700`.
+The program is loaded once: top-level code and `init` run, then the host loops `update`/`draw` every frame. In windowed mode, saving the file reloads the program (see the [CLI reference](README.md#cli-reference)).
 
 ## Bouncing rectangle
 
-This is the program currently in `examples/test.fth`.
+`examples/test.fth` — the whole program:
 
 ```forth
+\ GameForth demo: a bouncing rectangle.
+\ The host runs init once, then update and draw every frame.
+
 variable x
 variable y
 variable dx
 variable dy
-variable initialized
 
-initialized @ 0= if
+: init
   350 x !
   250 y !
   4 dx !
   3 dy !
-  -1 initialized !
-then
+;
 
-dx @ x +!
-dy @ y +!
+: update
+  dx @ x +!
+  dy @ y +!
 
-x @ 0 < if
-  0 x !
-  -1 dx @ * dx !
-then
+  x @ 0 < if 0 x ! dx @ negate dx ! then
+  x @ 700 > if 700 x ! dx @ negate dx ! then
+  y @ 0 < if 0 y ! dy @ negate dy ! then
+  y @ 500 > if 500 y ! dy @ negate dy ! then
+;
 
-x @ 700 > if
-  700 x !
-  -1 dx @ * dx !
-then
-
-y @ 0 < if
-  0 y !
-  -1 dy @ * dy !
-then
-
-y @ 500 > if
-  500 y !
-  -1 dy @ * dy !
-then
-
-x @ y @ 100 100 rl-red draw-rectangle
+: draw
+  "Bouncing rectangle" 20 20 20 rl-white draw-text
+  x @ y @ 100 100 rl-red draw-rectangle
+;
 ```
 
-Variables:
+Walking through it:
 
-- `x`, `y` — top-left position
-- `dx`, `dy` — velocity per frame
-- `initialized` — one-time setup flag
+- `variable x` ... declares four cells. Top-level runs once, so they are allocated exactly once.
+- `: init` seeds positions and velocities. At load time the host calls `init` once, so the square starts at `(350, 250)`.
+- `: update` moves first — `dx @ x +!` is `( value addr -- )` — then checks each wall. When a wall is crossed the position is clamped and the velocity flips using `negate` instead of `-1 *`.
+- The wall limits (700 and 500) are tuned for a 100-wide square in an 800x600 window: `800 - 100 = 700`, `600 - 100 = 500`.
+- `: draw` first renders a label with `draw-text` (the signature is `handle x y size`), then the rectangle — arguments come off the stack in `( x y w h )` order, with the color word after the numbers and before the draw word.
 
-Each frame:
+## Modular starfield demo
 
-1. On the first frame, set the starting position and velocity, then set `initialized` to `-1`.
-2. Add the velocity to the position.
-3. If the rectangle crosses a boundary, clamp it to the boundary and negate the corresponding velocity.
-4. Draw the rectangle at the updated position.
-
-The rectangle moves diagonally at `4` pixels per frame horizontally and `3` pixels per frame vertically. At 60 FPS, that is about `240` pixels per second horizontally and `180` pixels per second vertically.
-
-## Multiple moving objects
+`examples/demo/main.fth` splits a program across three files:
 
 ```forth
-variable x1
-variable y1
-variable x2
-variable y2
-variable initialized
+\ examples/demo/main.fth
+\ Starfield demo.
+\ Run with: cargo run -- examples/demo/main.fth
 
-initialized @ 0= if
-  100 x1 !
-  200 y1 !
-  400 x2 !
-  300 y2 !
-  -1 initialized !
-then
+include "lib/starfield.fth"
 
-x1 @ 1 + x1 !
-x2 @ -1 + x2 !
+variable player-x
+variable player-y
 
-x1 @ y1 @ 60 60 rl-green draw-rectangle
-x2 @ y2 @ 80 80 rl-orange draw-rectangle
+: init
+  init-stars
+  400 player-x !
+  300 player-y !
+;
+
+: update
+  update-stars
+
+  key-left  key-down? if player-x @ 5 - player-x ! then
+  key-right key-down? if player-x @ 5 + player-x ! then
+  key-up    key-down? if player-y @ 5 - player-y ! then
+  key-down  key-down? if player-y @ 5 + player-y ! then
+
+  key-space key-pressed? if init-stars then
+;
+
+: draw
+  draw-stars
+  player-x @ player-y @ 18 rl-skyblue draw-circle
+  player-x @ player-y @ 26 rl-darkblue draw-circle-lines
+
+  "Arrow keys move. Space reseeds the stars." 20 20 20 rl-white draw-text
+  "frame" 20 50 16 rl-gray draw-text
+  frame 80 50 16 rl-gray draw-number
+  "stars" 20 70 16 rl-gray draw-text
+  star-count @ 80 70 16 rl-gray draw-number
+;
 ```
 
-This moves one rectangle to the right and the other to the left. Add bounds checks if they should bounce instead of leaving the screen.
-
-## Useful arithmetic idioms
-
-### Negate a value
+The starfield lives in `lib/starfield.fth`, which includes one helper of its own:
 
 ```forth
-5 -1 * .
+\ examples/demo/lib/starfield.fth
+\ A tiny starfield built from three parallel arrays.
+
+include "random.fth"
+
+create stars-x 80 cells allot
+create stars-y 80 cells allot
+create stars-speed 80 cells allot
+variable star-count
+
+: star-x ( i -- addr ) cells stars-x + ;
+: star-y ( i -- addr ) cells stars-y + ;
+: star-speed ( i -- addr ) cells stars-speed + ;
+
+: init-stars
+  80 0 do
+    800 random i star-x !
+    600 random i star-y !
+    1 4 random-between i star-speed !
+  loop
+  80 star-count !
+;
+
+: update-stars
+  star-count @ 0 do
+    i star-y @ i star-speed @ + i star-y !
+    i star-y @ 600 > if
+      0 i star-y !
+      800 random i star-x !
+    then
+  loop
+;
+
+: draw-stars
+  star-count @ 0 do
+    i star-x @ i star-y @ 2 rl-lightgray draw-circle
+  loop
+;
 ```
-
-Output:
-
-```text
--5
-```
-
-### Compute a remainder
-
-There is no `mod` word. Compute `17 mod 5` with:
 
 ```forth
-17 dup 5 / 5 * - .
+\ examples/demo/lib/random.fth
+\ Random helpers shared by the demo.
+
+: random-between ( lo hi -- n )
+  over - random + ;
 ```
 
-Output:
+Each star is one index in three parallel arrays. `star-x` etc. are index-to-address helpers: `i star-x !` stores the loop counter's row. Things to notice:
 
-```text
-2
-```
+- `create stars-x 80 cells allot` — `create` reserves nothing by itself; `allot` grows the arena.
+- `include "random.fth"` inside `lib/starfield.fth` resolves relative to that file's directory, not the main file's, so the tree can be moved as a unit.
+- `star-count @ 0 do ... loop` — the count is a variable, so the loop reads its size once at loop start.
+- `key-space key-pressed?` reshuffles stars once per press, versus `key-down?` which would refill every frame it is held.
 
-### Clamp a variable
+The `( i -- addr )` comments are Forth's traditional stack-effect comment convention. GameForth treats them as block comments: the text between `(` and `)` is skipped. Watch the spaces — `( i -- addr )` needs the paren to start its own token, which it does here because of the space in front.
+
+## How `include` composes the demo
+
+Loading `main.fth` does this, in order:
+
+1. `main.fth` sees `include "lib/starfield.fth"`.
+2. `starfield.fth` sees `include "random.fth"` → `lib/random.fth` defines `random-between`.
+3. Back in `starfield.fth`: three arrays and `star-count` are carved out of the arena, and the `star-*`, `init-stars`, `update-stars`, `draw-stars` words are defined.
+4. Back in `main.fth`: the `player-*` words and `init`/`update`/`draw` are defined.
+5. Top level ends; `init` runs once; the frame loop starts.
+
+A file included twice would run twice — declarations (`variable`, `constant`, `value`) tolerate this, but plain definitions would simply be replaced, and side-effecting top-level statements would run twice. Includes guard against cycles instead of deduplication, so structure your includes as a tree.
+
+## Fragments
+
+Small, self-contained chunks to adapt.
+
+### Counting loop that prints
 
 ```forth
-x @ 0 < if
-  0 x !
-then
-
-x @ 700 > if
-  700 x !
-then
+10 0 do i . loop
 ```
 
-### Reflect a velocity
+### Sine-wave row of dots
 
 ```forth
-x @ 700 > if
-  700 x !
-  -1 dx @ * dx !
-then
+: wave
+  30 0 do
+    i 10 / fixed sin 30 * 100 +
+    i 20 * swap 4 4 rl-yellow draw-circle
+  loop
+;
+
+: draw wave ;
 ```
 
-### Print debug state
+`i 10 / fixed` converts the loop index into fixed radians; `sin` gives `-1000..1000`; `30 *` is ±30 px; `100 +` centers the wave around `y = 100`. Then `i 20 * swap` lines up `( y x )` into `( x y )` before the circle draw.
+
+### Two-key paddle control
 
 ```forth
-x @ .
+variable paddle-x
+
+: init 380 paddle-x ! ;
+
+: update
+  key-left  key-down? if paddle-x @ 8 - paddle-x ! then
+  key-right key-down? if paddle-x @ 8 + paddle-x ! then
+  paddle-x @ 0 < if 0 paddle-x ! then
+  paddle-x @ 720 > if 720 paddle-x ! then
+;
+
+: draw
+  paddle-x @ 550 60 16 rl-white draw-rectangle
+;
 ```
 
-This prints the value of `x` to stdout. It runs every frame, so use it only temporarily.
+### Score with `value` and `to`
+
+```forth
+0 value score
+
+: bump 1 score + 10 mod to score ;
+
+: update
+  key-space key-pressed? if bump then
+;
+
+: draw
+  "score" 20 20 20 rl-white draw-text
+  score 90 20 20 rl-white draw-number
+;
+```
+
+`value` pushes the contents directly, so reading is terse; `to` is the write side.
+
+### Headless smoke test
+
+```sh
+cargo run -- --headless --frames 120 examples/test.fth
+```
+
+Runs 120 simulated frames at 16 ms each and exits nonzero on the first error. No window appears. Good for checking a program's logic in CI or before opening the real window.

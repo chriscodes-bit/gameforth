@@ -1,24 +1,26 @@
 # GameForth
 
-GameForth is a small Forth-like language embedded in a Rust program that uses raylib for rendering. You write a `.fth` file, the program evaluates it once per frame, and the words in the file push numbers onto a stack and queue drawing commands.
+GameForth is a small Forth-like language for making simple 2D games and animations with Rust and raylib. You write a `.fth` file, the interpreter runs `init` once, then calls `update` and `draw` every frame. Words push numbers onto a stack and queue drawing commands.
 
-It is not ANS Forth and it is not trying to be. It is a small interpreter built around a tokenizer, a dictionary, a data stack, and a list of draw commands. The goal is a small, stack-based language for making simple 2D things without a lot of setup.
+It is not ANS Forth and it is not trying to be. It is one interpreter, a stack of `i64`, and a list of draw commands. The goal is a small, stack-based language for making simple 2D things without a lot of setup.
 
 ## Status
 
 Early and still changing. The language currently has:
 
-- signed 64-bit integer arithmetic
-- stack words such as `dup`, `drop`, `swap`, and `over`
-- comparisons and `if` / `else` / `then`
-- `begin` / `until` loops
-- user-defined words with `: name ... ;`
-- global variables with `variable`, `@`, `!`, and `+!`
-- filled rectangles and circles
-- a handful of named raylib colors
-- `.` for printing integers to the terminal
+- signed 64-bit integers, plus fixed-point helpers at a scale of `1000`
+- a full stack vocabulary: `dup`, `drop`, `swap`, `over`, `rot`, `pick`, and return stack words
+- comparisons, `if`/`else`/`then`, `begin`/`until`, `begin`/`while`/`repeat`, `do`/`loop`, `?do`/`+loop`
+- `leave`, `exit`, `recurse`, and loop indexes `i` and `j`
+- line comments (`\`), block comments (`( ... )`), and string literals (`"text"`)
+- memory: `variable`, `create`, `allot`, `,`, `constant`, `value`, `to`
+- keyboard and mouse input with named key constants
+- delta time, elapsed time, and a frame counter
+- text rendering, filled and outlined rectangles and circles, and lines
+- modular programs with `include "path"`
+- errors that report file, line, column, and the call stack
 
-There are no comments, strings, floats, text rendering words, input words, or timing words yet.
+There are no floats, textures, sprites, or sound yet.
 
 ## Requirements
 
@@ -35,88 +37,84 @@ Raylib is built through the `raylib` crate, and its build uses bindgen, so libcl
 From the repository root:
 
 ```sh
-cargo run
+cargo run                                       # windowed, loads examples/test.fth
+cargo run -- examples/demo/main.fth             # the modular starfield demo
+cargo run -- --headless --frames 60 examples/test.fth
 ```
 
-It opens an 800x600 window at 60 FPS and loads [`examples/test.fth`](examples/test.fth). Edit that file and restart the program to try something else.
+Options:
 
-If evaluation fails, the error is printed to stderr as `Forth error: ...` and the loop stops.
+| Option | Meaning |
+| --- | --- |
+| `[source.fth]` | Which file to run. Defaults to `examples/test.fth` |
+| `--headless` | Run without opening a window |
+| `--frames N` | Stop after N frames (headless defaults to 1) |
+| `--no-watch` | Disable hot reload |
+
+Windowed mode watches the source file: save it and the program reloads on the next frame. If the new file fails to load, the error is printed and the old program keeps running.
+
+In windowed mode, a Forth error is printed to stderr and the loop stops. In headless mode it is printed and the process exits nonzero.
 
 ## A small program
 
 ```forth
-350 250 100 100 rl-red draw-rectangle
-```
+\ bounce.fth
 
-That draws a red `100x100` rectangle with its top-left corner at `(350, 250)`. Since the source runs every frame, the rectangle is redrawn every frame. It stays put until something changes its coordinates.
-
-For animation, keep state in variables:
-
-```forth
 variable x
-variable initialized
+variable dx
 
-initialized @ 0= if
+: init
   0 x !
-  -1 initialized !
-then
+  4 dx !
+;
 
-x @ 2 + x !
-x @ 700 > if
-  0 x !
-then
+: update
+  dx @ x +!
+  x @ 700 > if
+    700 x !
+    dx @ negate dx !
+  then
+;
 
-x @ 250 100 100 rl-blue draw-rectangle
+: draw
+  x @ 0 100 100 rl-red draw-rectangle
+;
 ```
 
-This moves a blue rectangle to the right and wraps it back to the left edge when it reaches the end.
-
-The current [`examples/test.fth`](examples/test.fth) is a slightly bigger version that bounces diagonally and reverses direction at the screen edges.
+The file is loaded once: top-level code runs, then `init` runs once. After that, each frame runs `update`, then `draw`, then the queue of draw commands is rendered. Drawing words do not paint immediately; they queue commands, so the last command drawn is the one on top.
 
 ## How it fits together
 
 | File | What it does |
 | --- | --- |
-| `src/lexer.rs` | Splits source into numbers and words |
+| `src/lexer.rs` | Splits source into located tokens: numbers, words, strings, comments |
 | `src/stack.rs` | The `i64` data stack |
-| `src/dictionary.rs` | Builtin words, color words, user definitions, and variable entries |
-| `src/interpreter.rs` | Executes tokens, control flow, definitions, and variables |
-| `src/graphics.rs` | Stores the draw command queue and current color |
-| `src/main.rs` | Runs the raylib window and frame loop |
+| `src/memory.rs` | Cell arena addressed by integers |
+| `src/strings.rs` | String pool; Forth code sees integer handles |
+| `src/input.rs` | Keyboard and mouse snapshot for the current frame |
+| `src/time.rs` | Delta time, elapsed time, frame counter |
+| `src/rng.rs` | Xorshift random number generator |
+| `src/dictionary.rs` | Builtin words, colors, constants |
+| `src/control.rs` | Precomputed jump targets for control flow |
+| `src/error.rs` | Source locations and call stacks |
+| `src/context.rs` | Shared runtime state passed to every builtin |
+| `src/interpreter.rs` | Execution, lifecycle, includes, loops, diagnostics |
+| `src/graphics.rs` | Draw command queue and current color |
+| `src/main.rs` | CLI, windowed/headless loop, hot reload, input snapshot, rendering |
 
-The important part to understand is the frame loop:
+## Lifecycle in one paragraph
 
-1. Clear the previous frame's draw commands.
-2. Evaluate the whole Forth source file.
-3. Render the commands that were queued during evaluation.
-
-The stack, dictionary, variables, and current color survive between frames. The draw command list does not. That is why variables are used for animation and drawing words are called again every frame.
-
-## Language at a glance
-
-| Category | Words |
-| --- | --- |
-| Arithmetic | `+` `-` `*` `/` |
-| Stack | `dup` `drop` `swap` `over` |
-| Comparison | `=` `<` `>` `0=` |
-| Control flow | `if` `else` `then` `begin` `until` |
-| Definitions | `:` `;` |
-| Variables | `variable` `@` `!` `+!` |
-| Graphics | `draw-rectangle` `draw-circle` |
-| Colors | `rl-red` `rl-green` `rl-blue` `rl-white` `rl-black` `rl-yellow` `rl-orange` `rl-purple` `rl-pink` `rl-gray` |
-| Output | `.` |
-
-Words are whitespace-separated, case-sensitive, and postfix. Numbers are pushed onto the stack; words consume and produce stack values.
+Loading a file tokenizes it, executes the top-level code once (definitions, variables, includes), then calls `init` if it is defined. Every frame after that clears the draw list, calls `update`, calls `draw`, and renders the queue. The stack, memory, dictionary, string pool, and current color persist between frames. The draw command list does not.
 
 ## Documentation
 
 More detailed documentation lives in [`docs/`](docs/README.md):
 
-- [Language guide](docs/language.md)
-- [Word reference](docs/words.md)
-- [Graphics and animation](docs/graphics.md)
-- [Examples](docs/examples.md)
-- [Internals](docs/internals.md)
+- [Language guide](docs/language.md) — syntax, lifecycle, control flow, memory, strings, input, time, includes, errors
+- [Word reference](docs/words.md) — every word with stack effects
+- [Graphics and animation](docs/graphics.md) — coordinates, draw commands, colors, text
+- [Examples](docs/examples.md) — the bounce example and the modular demo, walkthroughs
+- [Internals](docs/internals.md) — module layout, architecture, extension points
 
 ## Tests
 
@@ -125,19 +123,16 @@ cargo test
 cargo fmt -- --check
 ```
 
-The tests cover variable storage, idempotent variable declarations, `+!`, invalid addresses, and the bouncing example staying inside the window.
+The tests cover the stack and arithmetic words, control flow (`do`/`loop`, `leave`, `while`/`repeat`, `exit`, `recurse`), variables, values and constants, memory arrays, fixed-point math, strings and text commands, comments, the `init`/`update`/`draw` lifecycle, diagnostics with locations and call stacks, and `include` with relative paths and cycle detection. The bounce example is run for 500 frames and checked to stay in bounds.
 
 ## Known limitations
 
-- No comments or string literals.
-- No floating-point numbers.
-- No text drawing from Forth.
-- No keyboard, mouse, or other input.
-- No frame counter, time, or random words.
+- No floating-point numbers; fixed-point helpers use an integer scale of `1000`.
+- `text-width` is approximate (`chars * size / 2`), not measured with the real font.
+- No textures, sprites, or images.
 - No sound.
-- Only filled rectangles and circles.
-- Variables are global.
-- The source path is fixed to `examples/test.fth`.
+- Only one global dictionary and one global stack; no locals.
+- Hot reload restarts the whole interpreter, so state resets on every save.
 - The language and its syntax are still changing.
 
 ## License

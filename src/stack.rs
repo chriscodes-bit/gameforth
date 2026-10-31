@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub struct Stack {
     data: Vec<i64>,
 }
@@ -26,5 +26,21 @@ impl Stack {
         } else {
             self.data.get(self.data.len() - 2)
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
+    pub fn as_slice(&self) -> &[i64] {
+        &self.data
     }
 }

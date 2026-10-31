@@ -9,419 +9,273 @@ This page describes how the GameForth implementation is organized and how to ext
 - [Runtime architecture](#runtime-architecture)
 - [Data structures](#data-structures)
 - [Execution details](#execution-details)
-- [Control-flow scanning](#control-flow-scanning)
-- [Definitions and variables](#definitions-and-variables)
+- [Control-flow compilation](#control-flow-compilation)
+- [Lifecycle and the host loop](#lifecycle-and-the-host-loop)
+- [Includes](#includes)
+- [Diagnostics](#diagnostics)
+- [Memory model](#memory-model)
+- [Strings](#strings)
+- [Input and time](#input-and-time)
 - [Graphics pipeline](#graphics-pipeline)
-- [Error handling](#error-handling)
 - [Tests](#tests)
 - [Extending the language](#extending-the-language)
-- [Implementation quirks](#implementation-quirks)
 - [Possible future work](#possible-future-work)
 
 ## Project layout
 
 | Path | Purpose |
 | --- | --- |
-| `src/main.rs` | Window setup and the frame loop |
-| `src/lexer.rs` | Tokenizer and `Token` enum |
-| `src/stack.rs` | Data stack |
-| `src/dictionary.rs` | Dictionary, word kinds, builtins, color words |
-| `src/interpreter.rs` | Token execution, control flow, definitions, variables |
-| `src/graphics.rs` | Draw command queue and color state |
-| `src/bin/raylib_test.rs` | Separate raylib smoke-test binary; not part of Forth |
-| `examples/test.fth` | Source file loaded by the main application |
+| `src/main.rs` | CLI parsing, windowed/headless loops, hot reload, input snapshot, rendering |
+| `src/lib.rs` | Exposes the runtime as a library so `main.rs` (and external users) link against it |
+| `src/lexer.rs` | Tokenizer; located tokens, comments, strings, number bases |
+| `src/stack.rs` | The `i64` data stack |
+| `src/memory.rs` | Flat cell arena |
+| `src/strings.rs` | String pool |
+| `src/input.rs` | Per-frame input snapshot and tracked key list |
+| `src/time.rs` | `dt`/`time`/`frame` state |
+| `src/rng.rs` | Xorshift generator |
+| `src/context.rs` | Everything a builtin can touch, behind one `&mut Context` |
+| `src/dictionary.rs` | Dictionary, all builtin words, colors, key/mouse constants |
+| `src/control.rs` | Control-flow compiler and `CompiledWord` |
+| `src/error.rs` | `SourceLocation`, `CallFrame`, `ForthError` |
+| `src/interpreter.rs` | Execution, lifecycle, includes, loops, definitions, diagnostics |
+| `src/graphics.rs` | Draw command queue and current color |
+| `src/bin/raylib_test.rs` | Separate raylib smoke-test binary; unrelated to Forth |
+| `examples/test.fth` | Simple bounce demo |
+| `examples/demo/main.fth` | Modular demo entry point |
+| `examples/demo/lib/*.fth` | Demo modules loaded via `include` |
 | `docs/` | This documentation |
+
+`Cargo.toml` sets `default-run = "gameforth"` so `cargo run` builds the interpreter, not the raylib test bin.
 
 ## Build and test
 
-```powershell
+```sh
 cargo build
 cargo run
 cargo test
 cargo fmt -- --check
 ```
 
-The main binary is `gameforth`. Cargo also builds `raylib_test` from `src/bin/raylib_test.rs`; that binary is an unrelated raylib drawing test and does not use the Forth interpreter.
-
 ## Runtime architecture
 
-At a high level:
-
 ```text
-main loop
+main.rs
+  +-- load_interpreter(path)
+  |     +-- Interpreter::load(source, path)
+  |           +-- tokenize(source, file) -> Vec<Token>
+  |           +-- CompiledWord::new("<top-level>", tokens)   (control-flow compile)
+  |           +-- execute top level
+  |           +-- call init
   |
-  +-- graphics.clear()
-  |
-  +-- Interpreter::eval(source)
-  |     |
-  |     +-- tokenize(source) -> Vec<Token>
-  |     |
-  |     +-- execute_tokens(tokens)
-  |           |
-  |           +-- Number       -> stack.push(number)
-  |           +-- Special form -> if/else/then, begin/until, :/;,
-  |           |                  variable, @, !, +!
-  |           +-- Dictionary lookup
-  |                 +-- Builtin     -> fn(&mut Stack, &mut Graphics)
-  |                 +-- UserDefined -> execute_tokens(body)
-  |                 +-- Color       -> graphics.set_color(color)
-  |                 +-- Variable    -> stack.push(address)
-  |
-  +-- render graphics.commands in order
-  |
-  +-- repeat
+  +-- per frame (windowed)
+        +-- snapshot_input(rl)          -> InputState
+        +-- set_time(dt, elapsed, frame)
+        +-- Interpreter::run_frame()
+        |     +-- graphics.clear()
+        |     +-- call update
+        |     +-- call draw
+        +-- render interpreter.context.graphics.commands
 ```
 
-The source string is read once in `main`, then passed to `Interpreter::eval` every frame.
+Everything the interpreter needs lives in one `Context` value. Builtins are plain `fn(&mut Context) -> Result<(), ForthError>` function pointers, so adding a word does not require threading new state through call sites.
 
 ## Data structures
 
-### `Token`
+### `Token` (`src/lexer.rs`)
 
 ```rust
-pub enum Token {
+enum TokenKind {
     Number(i64),
     Word(String),
+    String(String),
 }
+struct Token { kind: TokenKind, location: SourceLocation }
 ```
 
-`tokenize` splits on whitespace. A token that parses as `i64` becomes `Number`; everything else becomes `Word`.
+Tokens keep their file/line/column so every error can point at an exact position.
 
-### `Stack`
+### `Context` (`src/context.rs`)
 
-```rust
-pub struct Stack {
-    data: Vec<i64>,
-}
-```
+One struct holding the data stack, `Graphics`, `Memory`, `StringPool`, `InputState`, `TimeState`, `Rng`, and the return stack. Passed mutably to every builtin.
 
-The stack exposes:
-
-- `push(value)`
-- `pop() -> Option<i64>`
-- `peek() -> Option<&i64>`
-- `second() -> Option<&i64>`
-
-`second` returns the value below the top, or `None` if there are fewer than two values.
-
-### `Word`
+### `Dictionary` and `Word` (`src/dictionary.rs`)
 
 ```rust
-pub enum Word {
-    Builtin(Builtin),
-    UserDefined(Vec<Token>),
+enum Word {
+    Builtin(fn(&mut Context) -> Result<(), ForthError>),
+    UserDefined(Rc<CompiledWord>),
     Color(Color),
-    Variable(usize),
+    Address(usize),   // variable / create
+    Constant(i64),
+    Value(usize),     // value: index of one cell in the arena
 }
 ```
 
-- `Builtin` stores a function pointer.
-- `UserDefined` stores a captured token list.
-- `Color` stores a raylib color.
-- `Variable` stores an index into the interpreter's variable storage.
+`UserDefined` words are `Rc` so the dictionary can hand out clones without copying token lists.
 
-`Dictionary::find` clones the matching `Word`, so execution does not hold a borrow on the dictionary.
+### `CompiledWord` and `ControlMap` (`src/control.rs`)
 
-### `Builtin`
+Code that runs is always a `CompiledWord`: a token slice plus a `ControlMap` of precomputed jump targets for `if`/`else`/`then`, `begin`/`until`/`while`/`repeat`, and `do`/`loop`/`+loop`. Compilation happens when a file is loaded or a definition is made, which is how `begin ... nowhere` errors surface before any code executes.
 
-```rust
-pub type Builtin = fn(&mut Stack, &mut Graphics) -> Result<(), String>;
-```
+### `Interpreter` (`src/interpreter.rs`)
 
-Builtins can access the stack and graphics state. They cannot directly access the dictionary or variables. Features that need interpreter-level state are implemented as special forms instead.
+Owner of the `Context` and `Dictionary`, plus bookkeeping: include stack, call stack, loop stack, recursion depth, and loaded-file tracking.
 
-### `Dictionary`
+### `Memory` (`src/memory.rs`)
 
-```rust
-pub struct Dictionary {
-    words: HashMap<String, Word>,
-}
-```
+A flat `Vec<i64>`. Addresses are indices. `allocate`, `push_cell`, `allot` grow it; every accessor bounds-checks into a `ForthError`. `CELL_SIZE` is 1 (one arena slot per cell), so `cells` is currently the identity.
 
-The dictionary maps exact, case-sensitive names to words. Builtins and color words are registered in `Dictionary::new`.
+### `ForthError` (`src/error.rs`)
 
-### `Interpreter`
-
-```rust
-pub struct Interpreter {
-    pub stack: Stack,
-    pub graphics: Graphics,
-    variables: Vec<i64>,
-    dictionary: Dictionary,
-}
-```
-
-The interpreter owns the stack, graphics state, variable storage, and dictionary. These all persist for the lifetime of the interpreter.
-
-### `Graphics`
-
-```rust
-pub struct Graphics {
-    pub commands: Vec<DrawCommand>,
-    pub current_color: Color,
-}
-```
-
-`DrawCommand` currently has two variants:
-
-```rust
-pub enum DrawCommand {
-    Rectangle { x: i32, y: i32, width: i32, height: i32, color: Color },
-    Circle { x: i32, y: i32, radius: i32, color: Color },
-}
-```
-
-`Graphics::clear` removes all commands but does not reset `current_color`.
+Message plus optional `SourceLocation` plus optional call stack. `Display` renders `file:line:col: message` and one `  in word at file:line:col` line per call frame.
 
 ## Execution details
 
-`Interpreter::execute_tokens` is a loop over a token slice with a program counter:
+Execution is a program counter walk over a token slice:
+
+- Numbers push `i64`; strings intern into the pool and push the handle.
+- Control words consume the `ControlMap`: `if` jumps to `else`+1 or `then`+1 on a false flag, `until`/`while`/`repeat`/`loop` jump to their precomputed targets.
+- Everything else is dictionary lookup, dispatching on the `Word` kind.
+
+Flow propagation uses an enum:
 
 ```rust
-let mut pc = 0;
-
-while pc < tokens.len() {
-    match &tokens[pc] {
-        // ...
-    }
-    pc += 1;
-}
+enum Flow { Normal, Exit, Leave }
 ```
 
-Numbers are pushed directly.
+`exit` propagates as `Flow::Exit` and unwinds the current word; `leave` propagates until the frame's own loop stack entry is found, then jumps one past that loop's `loop` word. A `leave` with no loop in the same execution aborts as an error (`leave outside loop`), and `load`/`run_frame` turn a leaked `Leave` from a lifecycle word into a distinct error message.
 
-Special forms are matched by token text before dictionary lookup. This means they cannot be redefined by user code.
+### Loop state
 
-Other words are looked up in the dictionary:
+Each active `do` body gets a `LoopFrame { exec_id, do_index, loop_index, index, limit }` pushed onto a loop stack. `exec_id` distinguishes nested executions of the same word (recursion), so `loop` always pairs with the `do` currently on top, and `i`/`j` read the top two frames. The loop stack is truncated on word exit, which makes `leave`/`exit` from a loop self-cleaning.
 
-- `Builtin` — call the function pointer
-- `UserDefined` — recursively call `execute_tokens` on the stored body
-- `Color` — update `graphics.current_color`
-- `Variable` — push the stored address
+### Definitions
 
-User-defined word execution uses the Rust call stack. There is no separate Forth return stack.
+`:` captures the body tokens, compile-checks them with `compile_control`, and stores an `Rc<CompiledWord>` in the dictionary. Markers like the definition's name token and closing `;` are consumed at definition time. Because bodies are `Rc`s resolved at call time, forward references work naturally.
 
-## Control-flow scanning
+`variable`, `create`, `constant`, `value`, and `to` are handled inline by the interpreter for the same reason — they need the parser cursor and stack at the same time.
 
-GameForth does not compile control flow into jump instructions. Instead, it scans the token list at runtime.
+### `to`
 
-### `if`, `else`, `then`
+`to` works on both `value` words and plain variable addresses stored by `Address` entries. Anything else errors with `to: <name> is not a value or variable`.
 
-When the interpreter encounters `if`, it calls `find_conditional_boundaries(tokens, pc + 1)`.
+## Control-flow compilation
 
-That function scans forward and tracks nested `if` depth:
+`compile_control` walks a token stream with a stack of open constructs:
 
-- nested `if` increments depth
-- `then` at depth `0` is the matching `then`
-- `then` at a deeper level decrements depth
-- `else` at depth `0` is recorded as the matching `else`
+- `if` pushes an open `If`, resolved by `then` (recording optional `else` edges).
+- `begin` pushes an open `Begin`; `while` replaces tracking with a `While` carrying its `begin` index; `until`/`repeat` close.
+- `do`/`?do` push an open `Do`, closed by `loop`/`+loop`.
 
-It returns `(else_index, then_index)`.
+A `:` definition body is skipped in one pass so a definition's control words are never paired with constructs outside it — the body is compiled separately through `CompiledWord::new` when the interpreter reaches the `:`. Unclosed constructs at the end of a stream are errors that name the construct and point at its opening token.
 
-If the popped condition is `0`, the program counter is set to the `else` index if one exists, otherwise to the `then` index. The loop's final `pc += 1` moves execution into the selected branch.
+## Lifecycle and the host loop
 
-When the interpreter encounters `else` from the true branch, it scans forward for the matching `then` and jumps to it.
+`Interpreter::load(&str, Option<PathBuf>)`:
 
-`then` itself does nothing at runtime.
+1. Tokenizes and compiles the top level.
+2. Pushes the file onto the include stack (cycle detection and relative-include resolution treat it as the root).
+3. Executes the top level, tolerating `exit`.
+4. Calls `init` once if a user-defined word by that name exists.
 
-### `begin`, `until`
+`run_frame()` clears the draw commands, then calls `update` and `draw`. Both are optional; neither runs unless defined. The host (`main.rs`) supplies per-frame time and input before each call:
 
-When the interpreter encounters `until`, it pops a condition. If the condition is `0`, it calls `find_matching_begin(tokens, pc)` and jumps back to the matching `begin`.
+- Windowed: real `dt` from raylib, real input snapshot, hot reload by mtime comparison.
+- Headless: fixed 16 ms `dt`, empty input, `--frames` bound.
 
-`find_matching_begin` scans backward and tracks nested `until`/`begin` pairs:
+Hot reload rebuilds the entire `Interpreter`, so each save resets all state. A failed reload keeps the previous interpreter running and reports the error.
 
-- `until` increments depth
-- `begin` at depth `0` is the match
-- `begin` at a deeper level decrements depth
+## Includes
 
-If the condition is nonzero, execution continues after `until`.
+`include "path"`:
 
-## Definitions and variables
+1. Resolves the path: absolute as-is, else relative to the currently including file (`include_stack` top), else the main source file's directory, else `.`.
+2. Canonicalizes the result; failure is an error at the `include` token's location.
+3. Rejects the file if it is already on the include stack (cycle detection).
+4. Tokenizes, compiles, remembers it in `loaded_files`, pushes it onto the include stack, executes, pops.
 
-### Word definitions
+No caching, no deduplication: including the same file twice runs it twice. Cycle detection is what keeps the graph from looping forever.
 
-When the interpreter encounters `:`:
+## Diagnostics
 
-1. It reads the next token as the word name.
-2. It scans forward for the first `;`.
-3. It captures the tokens between the name and `;` as the body.
-4. It inserts a `UserDefined(body)` entry into the dictionary.
-5. It sets `pc` to the `;` token; the loop then advances past it.
+Error plumbing works like this:
 
-The body is not executed at definition time.
+1. Builtins return bare `ForthError`s with a message.
 
-### Variable declarations
+2. The token executor attaches the offending token's location if none exists.
 
-When the interpreter encounters `variable`:
+3. User-defined word calls push a `CallFrame` and, on error, attach a snapshot of the call stack to it via `with_call_stack`.
 
-1. It reads the next token as the variable name.
-2. If the dictionary already maps that name to `Word::Variable`, it does nothing.
-3. Otherwise it allocates a new cell at `variables.len()`, initializes it to `0`, and defines the name as `Word::Variable(address)`.
-4. It skips the name token.
+4. `Display` prints the location and then the stack in reverse-depth order.
 
-The idempotent behavior is required because the source is evaluated every frame. Without it, every frame would allocate a new cell and reset the variable to `0`.
+This is why an error deep inside an included file reports `main.fth:...`, `lib/...`, and every intermediate word.
 
-### Variable access
+## Memory model
 
-`@`, `!`, and `+!` are special forms:
+One arena for everything. Creation points:
 
-- `@` pops an address, validates it, reads the cell, and pushes the value.
-- `!` pops an address and a value, validates the address, and writes the cell.
-- `+!` pops an address and a value, validates the address, and adds to the cell.
+| Source | Allocation |
+| --- | --- |
+| `variable x` | One cell, once per name (idempotent check via dictionary probe) |
+| `create arr` | None; records `here` |
+| `allot` | Extends or shrinks by `n` cells |
+| `,` | One cell appended |
+| `value v` | One cell |
 
-Address validation is performed by `Interpreter::variable_index`, which rejects negative addresses and addresses beyond the current variable storage.
+Re-entry during hot reload starts a fresh interpreter, so a stale arena is never a concern within a session; within a single session there is no `free`.
+
+## Strings
+
+`StringPool` interns each string literal evaluation and returns an index. There is no deduplication — the same literal evaluated each frame becomes a new entry — so programs that reintern heavily grow the pool. This matches the design constraint that strings are handles, never pointers.
+
+## Input and time
+
+`InputState` is a plain snapshot: a `HashSet` of held and just-pressed key codes, mouse position/wheel, and two `bool` arrays for button state. `TRACKED_KEYS` enumerates the key codes main.rs polls; untracked keys resolve consistently to false.
+
+`TimeState` is three integers (`dt_ms`, `elapsed_ms`, `frame`) copied in by the host per frame. Real time information comes from raylib in windowed mode; headless uses the fixed values from the CLI contract.
 
 ## Graphics pipeline
 
-Drawing words are builtins in `dictionary.rs`:
+`Graphics` keeps a `Vec<DrawCommand>` plus a `current_color: Color`. Every draw word appends the current color into the command. `main.rs` matches on the enum and calls the matching raylib function — `draw_rectangle`, `draw_rectangle_lines`, `draw_circle`, `draw_circle_lines`, `draw_line`, `draw_text`.
 
-- `draw-rectangle` pops `height`, `width`, `y`, then `x`
-- `draw-circle` pops `radius`, `y`, then `x`
-
-Both call methods on `Graphics`:
-
-- `Graphics::draw_rectangle`
-- `Graphics::draw_circle`
-
-Those methods push a `DrawCommand` containing the current `current_color`.
-
-The main loop:
-
-1. Calls `interpreter.graphics.clear()`.
-2. Evaluates the source.
-3. Iterates over `interpreter.graphics.commands`.
-4. Calls the corresponding raylib drawing function for each command.
-
-Because commands store their own color, changing `current_color` after a command is queued does not affect that command.
-
-Coordinates are cast from `i64` to `i32` with Rust's `as` cast.
-
-## Error handling
-
-`Interpreter::eval` returns `Result<(), String>`. Builtins and special forms return `Err(String)` for:
-
-- stack underflow
-- division by zero
-- unknown words
-- malformed definitions
-- invalid variable addresses
-- missing control-flow terminators
-
-Errors propagate with `?` through `execute_tokens`. The main loop handles the final error:
-
-```rust
-if let Err(err) = interpreter.eval(&source) {
-    eprintln!("Forth error: {}", err);
-    break;
-}
-```
-
-There is no in-language error recovery.
+Adding a new command is three steps: add the variant, add a `Graphics` method, add a match arm in `main.rs`.
 
 ## Tests
 
-Tests live in the `tests` module at the bottom of `src/interpreter.rs`.
+`cargo test` covers:
 
-Current tests cover:
+- Arithmetic, stack manipulation, and comparison words
+- Control flow: `if`/`else`/`then`, `begin`/`until`, `while`/`repeat`, `do`/`loop`, `leave`, `exit`, `recurse`
+- Variables, values, constants, `to`, arrays via `create`/`allot`/`,`
+- Fixed-point math
+- Strings: literals, `string-length`, `draw-text`
+- Comments (`\` and `( ... )`)
+- Lifecycle: `init` once, `update`/`draw` per frame, correct draw ordering
+- Diagnostics: error messages, locations, call stacks
+- Includes: nested relative resolution and cycle detection
+- The bounce example, 500 frames, staying in bounds
 
-- variable store and fetch
-- idempotent variable declarations
-- `+!`
-- invalid variable addresses
-- the bouncing example staying within screen bounds
-
-Run them with:
-
-```powershell
-cargo test
-```
+Structural pairing (mismatched `if`/`then` and friends) surfaces through compile errors in the same suite.
 
 ## Extending the language
 
-### Adding a builtin word
+To add a builtin:
 
-1. Write a function with the `Builtin` signature:
+1. Write `fn my_word(ctx: &mut Context) -> Result<(), ForthError>`.
+2. Register it in `Dictionary::new()` (`dict.add("my-word", my_word)`).
+3. Document it in `docs/words.md` with a stack effect.
 
-```rust
-fn my_word(stack: &mut Stack, graphics: &mut Graphics) -> Result<(), String> {
-    let value = stack.pop().ok_or("Stack underflow")?;
-    stack.push(value);
-    Ok(())
-}
-```
+To add a constant, use `dict.add_constant`; for a color, `dict.add_color`. To add a compiler form, add a match arm in `Interpreter::execute_word_token` and — if it pairs with anything — a field in `ControlMap` and handling in `compile_control`.
 
-2. Register it in `Dictionary::new`:
-
-```rust
-dict.add("my-word", my_word);
-```
-
-3. Document its stack effect in `docs/words.md`.
-
-### Adding a color word
-
-Register it in `Dictionary::new`:
-
-```rust
-dict.add_color("rl-cyan", Color::SKYBLUE);
-```
-
-Then document it in `docs/words.md`.
-
-### Adding a special form
-
-Add a match arm in `Interpreter::execute_tokens` before the generic dictionary lookup:
-
-```rust
-Token::Word(word) if word == "my-form" => {
-    // manipulate self.stack, self.variables, etc.
-}
-```
-
-Special forms are appropriate when a feature needs access to the interpreter, dictionary, or variable storage.
-
-### Adding a draw primitive
-
-1. Add a variant to `DrawCommand`.
-2. Add a method to `Graphics` that pushes the command with `self.current_color`.
-3. Add a builtin in `dictionary.rs` that pops the required values.
-4. Add a render arm in `main.rs`.
-
-### Adding a variable-like feature
-
-1. Add a variant to `Word`.
-2. Add a method to `Dictionary` that inserts it.
-3. Handle the variant in `Interpreter::execute_tokens`.
-
-## Implementation quirks
-
-- The source is read once and evaluated every frame.
-- The stack is not cleared between frames.
-- The dictionary and variables persist between frames.
-- Draw commands are cleared every frame.
-- `current_color` is not cleared every frame.
-- `variable` declarations are idempotent.
-- Special forms are matched before dictionary lookup and cannot be redefined.
-- `:` captures the first `;`; nested definitions are not supported.
-- Control-flow boundaries are found by runtime scans, not compiled jumps.
-- User-defined words recurse on the Rust call stack.
-- Coordinates are truncated to `i32` with an `as` cast.
-- There are no comments, strings, floats, or standard library words.
+Inputs for new host capabilities (audio, textures) would follow the input/time pattern: a struct on `Context`, filled in by `main.rs` per frame, read by builtins.
 
 ## Possible future work
 
-Natural extensions include:
-
-- comments
-- strings and text rendering
-- floating-point numbers
-- frame/time words
-- random numbers
-- more color control, including alpha
-- lines, triangles, and polygons
-- input handling
-- constants and locals
-- a return stack
-- `mod`, `negate`, and other arithmetic conveniences
-- error recovery
-- a configurable source path or command-line argument
+- Local variables or a locals stack.
+- Textures/sprites as first-class draw commands.
+- Sound.
+- A second wordlist or module namespaces.
+- A REPL / watch mode for single-line evaluation.
+- Constant folding or bytecode caching of `CompiledWord`s.
+- Better text metrics by measuring the real font.
