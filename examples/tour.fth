@@ -284,6 +284,22 @@ print-data
 "stddev via f-sqrt    = " type stddev .
 cr
 
+"== floats and math functions ==" type cr
+"3.14 * 2             = " type 3.14 2 * .
+"7 + 0.5 (promoted)   = " type 7 0.5 + .
+"2 0.5 /              = " type 2 0.5 / .
+"1.5 int-of           = " type 1.5 int-of .
+"3.7 -3.7 int-of      = " type 3.7 int-of . -3.7 int-of .
+"sqrt of 2.0          = " type 2.0 sqrt .
+"sin of 1.57 rad      = " type 1.57 sin .
+"floor/ceil/round     = " type 3.7 floor . space 3.2 ceil . space 3.5 round .
+cr
+"e exp of ln(e)       = " type e ln exp .
+"log10 of 100         = " type 100 log10 .
+"2 10 pow             = " type 2 10 pow .
+"hypot of 3 4 (float) = " type 3.0 4.0 hypot .
+cr
+
 "== random ==" type cr
 "three d100 rolls: " type
 100 random emit-digits space 100 random emit-digits space 100 random emit-digits space cr

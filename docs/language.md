@@ -9,6 +9,7 @@ This page describes the GameForth language as implemented in this repository. It
 - [Data types and the stack](#data-types-and-the-stack)
 - [Arithmetic](#arithmetic)
 - [Fixed-point math](#fixed-point-math)
+- [Floats and math functions](#floats-and-math-functions)
 - [Random numbers](#random-numbers)
 - [Stack manipulation](#stack-manipulation)
 - [Return stack](#return-stack)
@@ -59,7 +60,7 @@ A word should normally leave the stack as deep as it found it. The data stack is
 
 ## Lexical structure
 
-The lexer splits the source on whitespace and classifies each token as a number, a word, or a string. Every token remembers the file, line, and column it came from, and errors point back at it.
+The lexer splits the source on whitespace and classifies each token as an integer, a float, a word, or a string. Every token remembers the file, line, and column it came from, and errors point back at it.
 
 ### Numbers
 
@@ -73,6 +74,8 @@ $FF       \ hexadecimal
 0b1010    \ binary
 %1010     \ binary
 ```
+
+A token containing a decimal point that parses as a float lexes as a float: `3.14`, `-2.5`, `2.`, and `.5` are all floats. The decimal point is required, so a plain word like `1e3` or a dotted file name stays a word. Floats are real `f64` values on the stack; see [Floats and math functions](#floats-and-math-functions).
 
 A token that does not parse as a number is treated as a word.
 
@@ -102,7 +105,12 @@ Spaces, tabs, and newlines are all equivalent separators. Words are case-sensiti
 
 ## Data types and the stack
 
-GameForth has one data type: signed 64-bit integers. Strings exist only as handles into a pool.
+GameForth has two number types on the data stack: signed 64-bit integers and 64-bit floats (`f64`). Strings exist only as handles into a pool.
+
+```forth
+42 .        \ an integer, prints 42
+3.14 .      \ a float, prints 3.14
+```
 
 Stack effects in this documentation are written as:
 
@@ -110,7 +118,7 @@ Stack effects in this documentation are written as:
 ( before -- after )
 ```
 
-The rightmost item is the top of the stack.
+The rightmost item is the top of the stack. In stack effects below, `n` means an integer and `x` means a number of either kind; `a b` style notation is used for integers or values where the kind is clear from context. Most arithmetic words are polymorphic: if every operand is an integer they stay integers, and if any operand is a float the operands are promoted to floats and the result is a float. See [Floats and math functions](#floats-and-math-functions).
 
 ### Truth values
 
@@ -128,7 +136,7 @@ Popping from an empty stack is an error, not undefined behavior.
 
 ## Arithmetic
 
-All arithmetic is integer arithmetic on `i64`, wrapping on overflow.
+Two integers follow integer arithmetic on `i64`, wrapping on overflow. If any operand is a float, the others are promoted to `f64` and the result is a float; `mod`, `/mod`, and the bitwise words stay integer-only and reject floats.
 
 | Word | Stack effect | Meaning |
 | --- | --- | --- |
@@ -152,22 +160,23 @@ All arithmetic is integer arithmetic on `i64`, wrapping on overflow.
 | `invert` | `( a -- ~a )` | Bitwise complement |
 | `lshift` | `( n c -- n<<c )` | Shift left by `c` |
 | `rshift` | `( n c -- n>>c )` | Logical shift right by `c` |
-| `sqrt` | `( n -- isqrt )` | Integer square root, truncating |
+| `sqrt` | `( x -- s )` | Square root; integers truncate, floats return a float |
 
-`/`, `mod`, and `/mod` fail with `division by zero` when `b` is zero, and `division overflow` on the one case Rust's `checked_div` cannot represent (`i64::MIN / -1`).
+| `/`, `mod`, and `/mod` fail with `division by zero` when `b` is zero, and `division overflow` on the one case Rust's `checked_div` cannot represent (`i64::MIN / -1`). These are integer rules: `/` on floats follows IEEE semantics instead — `1.0 0.0 /` yields infinity, no error — while `mod` and `/mod` require integers.
 
 ```forth
 17 5 /mod . .     \ prints 2 then 3
 0x10 .            \ prints 16
 10 3 mod .        \ prints 1
 -7 2 / .          \ prints -3
+2 0.5 / .         \ promotes, prints 4 (a float)
 ```
 
 `lshift` and `rshift` fail when the shift count is not in `0..64`. `rshift` is a logical (unsigned) shift; `2/` is arithmetic.
 
 ## Fixed-point math
 
-There are no floats. Fractional values use a fixed-point representation with a scale of `1000`: the value `1.5` is stored as `1500`. Addition and subtraction work the same as integer math at this scale; multiplication and division need the dedicated words.
+Fractional values can also use a fixed-point representation with a scale of `1000`: the value `1.5` is stored as `1500`. Addition and subtraction work the same as integer math at this scale; multiplication and division need the dedicated words. These words are integer-only — a float argument is rejected with an error. They remain useful when everything on the stack must stay an integer, and for compatibility with older programs.
 
 | Word | Stack effect | Meaning |
 | --- | --- | --- |
@@ -176,9 +185,9 @@ There are no floats. Fractional values use a fixed-point representation with a s
 | `f*` | `( a b -- a*b )` | Fixed multiply, result scaled back down |
 | `f/` | `( a b -- a/b )` | Fixed divide, result scaled back up |
 | `f+` / `f-` | | Aliases of `+` and `-`, for readability with fixed values |
-| `sin` | `( x -- s )` | Sine of `x` radians (in fixed), result in fixed |
-| `cos` | `( x -- c )` | Cosine of `x` radians (in fixed), result in fixed |
-| `tan` | `( x -- t )` | Tangent of `x` radians (in fixed), result in fixed |
+| `sin` | `( x -- s )` | Sine of `x` radians, in fixed; a float argument switches to plain float trig (see below) |
+| `cos` | `( x -- c )` | Cosine, same rules as `sin` |
+| `tan` | `( x -- t )` | Tangent, same rules as `sin` |
 | `f-sqrt` | `( x -- s )` | Square root of a fixed value, result in fixed |
 | `pi` | | Constant, `3142` (roughly pi in fixed) |
 
@@ -187,6 +196,8 @@ There are no floats. Fractional values use a fixed-point representation with a s
 1000 fixed int .     \ prints 1
 pi sin .             \ pi is 3142, about 3.14 radians, so sin is almost 0
 ```
+
+For an integer argument, `sin` reads the value as radians scaled by `1000` and returns the result scaled by `1000` too (`1571 sin` gives `1000`). A float argument switches to plain float math: `1.571 sin` gives roughly `1.0`.
 
 For a smooth bobbing offset, a common pattern — `sin` returns roughly `-1000..1000` in fixed-point, so multiply by the amplitude you want in pixels:
 
@@ -197,6 +208,51 @@ For a smooth bobbing offset, a common pattern — `sin` returns roughly `-1000..
 ```
 
 Then use `100 bob-y` as a y coordinate for a draw word.
+
+## Floats and math functions
+
+Float literals (`3.14`, `2.`, `.5`) push real `f64` values. Arithmetic and comparisons accept them, mixing promotes the integer operands, and `.` and `.s` print floats with Rust's formatting. Polymorphic words include `+ - * / negate abs min max 1+ 1- sqrt`, all comparison and zero-comparison words, `?dup`, `.` and `.s`, and `draw-number`.
+
+Words that require integers reject floats with `expected an integer, got a float (convert with int-of)` and leave the float on the stack: memory (`@ ! +! , allot variable value to`), `mod` and `/mod`, `2*` and `2/` and the shifts, `do` and loop bounds, `random`, `emit`, text drawing coordinates, and `>r`. Convert at the boundary with `int-of`.
+
+```forth
+3.14 .              \ prints 3.14
+7 0.5 + .           \ promotes, prints 7.5
+2 0.5 / .           \ prints 4 (a float)
+1.5 int-of .        \ prints 1
+```
+
+| Word | Stack effect | Meaning |
+| --- | --- | --- |
+| `int-of` | `( x -- n )` | Float to integer, truncating toward zero; integers pass through |
+| `exp` | `( x -- e^x )` | e to the power of `x`, as a float |
+| `ln` | `( x -- log )` | Natural logarithm, as a float |
+| `log10` | `( x -- log )` | Base-10 logarithm, as a float |
+| `log2` | `( x -- log )` | Base-2 logarithm, as a float |
+| `pow` | `( a b -- a^b )` | Two ints stay integer (wrapping; a negative exponent is an error); otherwise `f64` `powf`, as a float |
+| `floor` | `( x -- y )` | Largest integer not above `x`, as a float; ints untouched |
+| `ceil` | `( x -- y )` | Smallest integer not below `x`, as a float; ints untouched |
+| `round` | `( x -- y )` | Nearest integer (half away from zero), as a float; ints untouched |
+| `trunc` | `( x -- y )` | Integer part of `x`, as a float; ints untouched |
+| `asin` / `acos` / `atan` | `( x -- a )` | Inverse trig; the result is a float in radians |
+| `atan2` | `( y x -- a )` | Angle of the point `(x, y)`, as a float; handles `x = 0` |
+| `sinh` / `cosh` / `tanh` | `( x -- y )` | Hyperbolic trig, as a float |
+| `hypot` | `( x y -- h )` | `sqrt(x^2 + y^2)` without intermediate overflow, as a float |
+| `e` | | Constant, Euler's number `2.718281828459045`, a float |
+
+All of these except `int-of` and `pow` on two ints always produce a float result, even for integer input (`exp`, `ln`, `log10`, `log2`, `asin`, `acos`, `atan`, `atan2`, the hyperbolics, and `hypot`). Rounding words keep integer values exactly as they are — `7 round` is still the integer `7` — so they are safe to insert in a purely integer computation.
+
+`sin`, `cos`, and `tan` are polymorphic: an integer argument keeps the legacy fixed-point behavior and a float argument uses plain float math (both listed above).
+
+```forth
+e ln .              \ prints 1 (ln of e)
+2 10 pow .          \ prints 1024 (two ints stay integer)
+2.0 0.5 pow .       \ prints 1.4142135623730951 (sqrt of 2)
+3 4 hypot .         \ promotes, prints 5
+3.7 floor .         \ prints 3
+```
+
+Note the mixed-type promotion: comparing an integer above 2^53 against a float promotes it to `f64` and may lose exactness.
 
 ## Random numbers
 
@@ -275,7 +331,7 @@ Terminal output words are available everywhere, including headless mode, which m
 
 | Word | Stack effect | Meaning |
 | --- | --- | --- |
-| `.` | `( n -- )` | Print an integer and a newline |
+| `.` | `( x -- )` | Print a number (integer or float) and a newline |
 | `.s` | `( -- )` | Print the whole stack: `<depth> v1 v2 ...` |
 | `cr` | | Print a newline |
 | `space` | | Print one space |
@@ -587,7 +643,8 @@ Common errors:
 | Error | Cause |
 | --- | --- |
 | `stack underflow` | A word needed more values than were on the stack |
-| `division by zero` | `/`, `mod`, `/mod`, or `f/` with a zero divisor |
+| `expected an integer, got a float (convert with int-of)` | A float reached a word that requires integers (memory, `mod`, loops, `random`, `emit`, coordinates, `>r`) |
+| `division by zero` | `/`, `mod`, or `/mod` with a zero integer divisor (float `/` follows IEEE semantics instead) |
 | `division overflow` | `i64::MIN / -1` |
 | `unknown word: w` | Token that is not a number, string, or dictionary entry |
 | `invalid address: n` | `@`, `!`, or `+!` outside the arena |
@@ -597,6 +654,7 @@ Common errors:
 | `zero increment in +loop` | `+loop` with increment `0` |
 | `leave outside loop` | `leave` not inside any `do`/`begin` loop |
 | `missing then for if`, `missing loop for do`, ... | Structural mismatch found at compile time |
+| `negative exponent in pow (use floats)` | `pow` with two integer operands and a negative exponent |
 | `unexpected ;` | A `;` with no definition open |
 | `include cycle detected: path` | Include graph contains a loop |
 | `cannot include 'path': ...` | The file could not be opened |
@@ -605,7 +663,8 @@ There is no error recovery inside Forth; the first error stops execution (and th
 
 ## Limitations
 
-- One number type: `i64`. No floats.
+- Two number types: `i64` integers and `f64` floats. Floats print with Rust's `{}` formatting, so results like `0.1 0.1 +` can trace artifacts such as `0.30000000000000004`.
+- Mixed int/float comparisons promote to `f64`, so integers beyond 2^53 lose exactness against floats.
 - No string operations beyond length, text drawing, and printing.
 - No locals, no wordlist scopes; one global dictionary.
 - No textures, sprites, shaders, or cameras.

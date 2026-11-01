@@ -7,6 +7,7 @@ use crate::dictionary::{Dictionary, Word};
 use crate::error::{CallFrame, ForthError, SourceLocation};
 use crate::input::InputState;
 use crate::lexer::{Token, TokenKind, tokenize};
+use crate::stack::Value;
 use crate::time::TimeState;
 
 #[derive(Debug, Clone)]
@@ -278,6 +279,11 @@ impl Interpreter {
                 Ok(Step::normal())
             }
 
+            TokenKind::Float(float) => {
+                self.context.push_value(Value::Float(*float));
+                Ok(Step::normal())
+            }
+
             TokenKind::String(value) => {
                 let handle = self.context.strings.intern(value.clone());
                 self.context.push(handle);
@@ -546,8 +552,12 @@ impl Interpreter {
 
             "constant" => {
                 let name = next_word(tokens, *pc + 1, "constant")?;
-                let value = self.context.pop()?;
-                self.dictionary.define_constant(&name, value);
+                let value = self.context.pop_value()?;
+
+                match value {
+                    Value::Int(number) => self.dictionary.define_constant(&name, number),
+                    Value::Float(number) => self.dictionary.define_float_constant(&name, number),
+                }
 
                 *pc += 1;
                 Ok(Step::normal())
@@ -641,6 +651,10 @@ impl Interpreter {
                 self.context.push(value);
                 Ok(Flow::Normal)
             }
+            Some(Word::FloatConstant(value)) => {
+                self.context.push_value(Value::Float(value));
+                Ok(Flow::Normal)
+            }
             Some(Word::Value(address)) => {
                 let value = self.context.memory.get(address as i64)?;
                 self.context.push(value);
@@ -671,6 +685,10 @@ impl Interpreter {
             }
             Some(Word::Constant(value)) => {
                 self.context.push(value);
+                Ok(Flow::Normal)
+            }
+            Some(Word::FloatConstant(value)) => {
+                self.context.push_value(Value::Float(value));
                 Ok(Flow::Normal)
             }
             Some(Word::Value(address)) => {
@@ -788,6 +806,205 @@ mod tests {
         interpreter
     }
 
+    #[test]
+    fn float_literals_and_arithmetic() {
+        let mut interpreter = eval("3.14 2 * 6.28 =");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+
+        let mut interpreter = eval("2.5 0.5 + dup int-of");
+        assert_eq!(interpreter.context.stack.pop(), Some(3));
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(3.0))
+        );
+
+        // int/float mixing promotes; the sum stays a float
+        let mut interpreter = eval("7 0.5 +");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(7.5))
+        );
+
+        let mut interpreter = eval("1.5 negate");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(-1.5))
+        );
+
+        let mut interpreter = eval("-2.5 abs");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(2.5))
+        );
+
+        let mut interpreter = eval("2 0.5 /");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(4.0))
+        );
+
+        // IEEE float division: no division-by-zero error on floats
+        let mut interpreter = eval("1.0 0.0 / 0= not");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+
+        // float sqrt
+        let mut interpreter = eval("0.25 sqrt");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(0.5))
+        );
+    }
+
+    #[test]
+    fn float_comparisons_and_min_max() {
+        let mut interpreter = eval("2.0 2 =");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+
+        let mut interpreter = eval("3 3.5 <");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+
+        let mut interpreter = eval("2.5 1.5 min 4 5.5 max");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(5.5))
+        );
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(1.5))
+        );
+
+        let mut interpreter = eval("0.0 0=");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+
+        let mut interpreter = eval("0.25 0< not");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+    }
+
+    #[test]
+    fn math_functions() {
+        // exp and ln are inverses
+        let mut interpreter = eval("e ln exp");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(std::f64::consts::E))
+        );
+
+        let mut interpreter = eval("100 log10");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(2.0))
+        );
+
+        // both-int power stays an integer: 2^10 = 1024
+        let mut interpreter = eval("2 10 pow");
+        assert_eq!(interpreter.context.stack.pop(), Some(1024));
+
+        let mut interpreter = eval("2.0 0.5 pow 1.4142135623730951 =");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+
+        // degrees-style sanity: sin of ~pi/2 rounds to 1 as a float
+        let mut interpreter = eval("1.57 sin round");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(1.0))
+        );
+
+        let mut interpreter = eval("3.7 floor");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(3.0))
+        );
+
+        let mut interpreter = eval("3.2 ceil");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(4.0))
+        );
+
+        let mut interpreter = eval("3.5 round");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(4.0))
+        );
+
+        let mut interpreter = eval("-3.7 trunc");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(-3.0))
+        );
+
+        let mut interpreter = eval("3.0 4.0 hypot");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(5.0))
+        );
+
+        let mut interpreter = eval("0.0 1.0 atan2");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(std::f64::consts::FRAC_PI_2))
+        );
+    }
+
+    #[test]
+    fn float_constants_and_literals() {
+        // `e` is a float constant
+        let mut interpreter = eval("e 2.718281828459045 =");
+        assert_eq!(interpreter.context.stack.pop(), Some(-1));
+
+        // float values can be named with `constant`
+        let mut interpreter = eval("1.5 constant half half half +");
+        assert_eq!(
+            interpreter.context.stack.pop_value(),
+            Some(Value::Float(3.0))
+        );
+
+        // integer constants still work as integers
+        let mut interpreter = eval("10 constant ten ten");
+        assert_eq!(interpreter.context.stack.pop_value(), Some(Value::Int(10)));
+    }
+
+    #[test]
+    fn float_rounding_keeps_ints() {
+        // rounding words leave integers untouched, including their type
+        let mut interpreter = eval("7 round");
+        assert_eq!(interpreter.context.stack.pop_value(), Some(Value::Int(7)));
+    }
+
+    #[test]
+    fn floats_are_rejected_where_integers_are_required() {
+        // memory stays integer-only
+        let mut interpreter = Interpreter::new();
+        assert!(
+            interpreter
+                .eval("variable x 1.5 x !")
+                .unwrap_err()
+                .to_string()
+                .contains("expected an integer")
+        );
+
+        let mut interpreter = Interpreter::new();
+        assert!(interpreter.eval("1.5 0 do i . loop").is_err());
+
+        // fixed-point arithmetic stays integer-only
+        let mut interpreter = Interpreter::new();
+        assert!(interpreter.eval("1.5 2 f*").is_err());
+
+        // loops stay integer-only
+        let mut interpreter = Interpreter::new();
+        assert!(interpreter.eval("7.5 2 mod").is_err());
+    }
+
+    #[test]
+    fn int_of_truncates_toward_zero() {
+        let mut interpreter = eval("3.7 int-of -3.7 int-of");
+        assert_eq!(interpreter.context.stack.pop(), Some(-3));
+        assert_eq!(interpreter.context.stack.pop(), Some(3));
+
+        // integers pass through unchanged
+        let mut interpreter = eval("-9 int-of");
+        assert_eq!(interpreter.context.stack.pop(), Some(-9));
+    }
     #[test]
     fn arithmetic_and_stack_words() {
         let mut interpreter = eval("7 3 + 2 * 5 / 1 - dup");

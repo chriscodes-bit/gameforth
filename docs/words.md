@@ -8,6 +8,7 @@ This page is the reference for every word currently available in GameForth.
 - [Word kinds](#word-kinds)
 - [Arithmetic words](#arithmetic-words)
 - [Fixed-point words](#fixed-point-words)
+- [Float and math function words](#float-and-math-function-words)
 - [Random words](#random-words)
 - [Stack words](#stack-words)
 - [Return stack words](#return-stack-words)
@@ -32,7 +33,7 @@ Stack effects are written as:
 ( before -- after )
 ```
 
-The rightmost item is the top of the stack. `flag` means a truth value: `0` is false, any nonzero is true. Comparison words produce `-1` for true and `0` for false. `handle` means a string-pool handle, `addr` means a memory address, `key` means a key code, `button` means a mouse button code.
+The rightmost item is the top of the stack. `n` means a signed 64-bit integer, `x` means a number of either kind, `f` means a float result. `flag` means a truth value: `0` is false, any nonzero is true. Comparison words produce `-1` for true and `0` for false. `handle` means a string-pool handle, `addr` means a memory address, `key` means a key code, `button` means a mouse button code.
 
 ## Word kinds
 
@@ -42,41 +43,43 @@ The rightmost item is the top of the stack. `flag` means a truth value: `0` is f
 | User-defined word | Anything made with `: name ... ;` | Compiled token list with its own control-flow table, called recursively with a depth limit |
 | Color word | `rl-red`, `rl-skyblue` | Dictionary entry that sets the current drawing color |
 | Address word | `variable x`, `create arr` | Dictionary entry that pushes an arena index |
-| Constant word | `pi`, `key-space`, `max-hp` from `constant` | Dictionary entry that pushes a fixed value |
+| Constant word | `pi`, `e`, `key-space`, `max-hp` from `constant` | Dictionary entry that pushes a fixed value (integer or float) |
 | Value word | Anything made with `value` | Dictionary entry that pushes a memory cell's contents |
 | Interpreter form | `if`, `do`, `:`, `to`, `include` | Handled directly by the interpreter, never dictionary entries |
 
 ## Arithmetic words
 
+Most arithmetic words are polymorphic: two integers stay integers (wrapping on overflow); if any operand is a float, the operands are promoted to `f64` and the result is a float. `mod`, `/mod`, `2*`, `2/`, and the bitwise words require integers and reject floats with `expected an integer, got a float (convert with int-of)`.
+
 | Word | Stack effect | Summary |
 | --- | --- | --- |
-| `+` | `( a b -- a+b )` | Add |
-| `-` | `( a b -- a-b )` | Subtract |
-| `*` | `( a b -- a*b )` | Multiply |
-| `/` | `( a b -- a/b )` | Divide, truncating toward zero |
-| `mod` | `( a b -- a%b )` | Remainder |
-| `/mod` | `( a b -- rem quot )` | Remainder and quotient |
-| `negate` | `( a -- -a )` | Negate |
+| `+` | `( x y -- x+y )` | Add; promotes to float if either operand is a float |
+| `-` | `( x y -- x-y )` | Subtract; same promotion |
+| `*` | `( x y -- x*y )` | Multiply; same promotion |
+| `/` | `( x y -- x/y )` | Integers: truncating division; floats: IEEE division, no zero-divisor error |
+| `mod` | `( n m -- n%m )` | Remainder, integers only |
+| `/mod` | `( n m -- rem quot )` | Remainder and quotient, integers only |
+| `negate` | `( x -- -x )` | Negate |
 | `abs` | `( a -- |a| )` | Absolute value |
-| `min` | `( a b -- min )` | Minimum |
-| `max` | `( a b -- max )` | Maximum |
-| `1+` | `( a -- a+1 )` | Increment |
-| `1-` | `( a -- a-1 )` | Decrement |
-| `2*` | `( a -- a*2 )` | Double |
-| `2/` | `( a -- a>>1 )` | Arithmetic halve |
-| `and` | `( a b -- a&b )` | Bitwise and |
-| `or` | `( a b -- a|b )` | Bitwise or |
-| `xor` | `( a b -- a^b )` | Bitwise exclusive or |
-| `invert` | `( a -- ~a )` | Bitwise complement |
+| `min` | `( x y -- min )` | Minimum; promotes like the arithmetic words |
+| `max` | `( x y -- max )` | Maximum; promotes like the arithmetic words |
+| `1+` | `( x -- x+1 )` | Increment |
+| `1-` | `( x -- x-1 )` | Decrement |
+| `2*` | `( n -- n*2 )` | Double, integers only |
+| `2/` | `( n -- n>>1 )` | Arithmetic halve, integers only |
+| `and` | `( n m -- n&m )` | Bitwise and |
+| `or` | `( n m -- n|m )` | Bitwise or |
+| `xor` | `( n m -- n^m )` | Bitwise exclusive or |
+| `invert` | `( n -- ~n )` | Bitwise complement |
 | `lshift` | `( n c -- n<<c )` | Shift left |
 | `rshift` | `( n c -- n>>c )` | Logical shift right |
-| `sqrt` | `( n -- isqrt )` | Integer square root |
+| `sqrt` | `( x -- s )` | Integers: truncating integer root; floats: float square root; negative input is an error |
 
-All arithmetic wraps on overflow. `/`, `mod`, `/mod` fail on a zero divisor and on `i64::MIN / -1`. `lshift`/`rshift` require `0 <= c < 64`; `rshift` treats `n` as unsigned. `sqrt` requires `n >= 0` and truncates.
+Integer arithmetic wraps on overflow. `/`, `mod`, `/mod` fail on a zero integer divisor and on `i64::MIN / -1`. `lshift`/`rshift` require `0 <= c < 64`; `rshift` treats `n` as unsigned.
 
 ## Fixed-point words
 
-Fractional math uses a scale of `1000`: `1.5` is `1500`.
+Fractional math can use a scale of `1000` on integers: `1.5` is `1500`. These words are integer-only; see the float words below for plain float math.
 
 | Word | Stack effect | Summary |
 | --- | --- | --- |
@@ -91,7 +94,40 @@ Fractional math uses a scale of `1000`: `1.5` is `1500`.
 | `tan` | `( r -- t )` | Tangent, same conventions |
 | `f-sqrt` | `( x -- s )` | Square root of a fixed value, result in fixed |
 
-`sin`, `cos`, and `tan` take radians in fixed-point: `0` is `0`, `pi` (the constant `3142`) is roughly one pi. `f-sqrt` requires `x >= 0`. There is no general `f^` or exponent; compose `f*` for powers.
+`sin`, `cos`, and `tan` take radians in fixed-point for integer arguments: `0` is `0`, `pi` (the constant `3142`) is roughly one pi. A float argument switches to plain float math and returns a float. `f-sqrt` requires `x >= 0`.
+
+## Float and math function words
+
+| Word | Stack effect | Summary |
+| --- | --- | --- |
+| `int-of` | `( x -- n )` | Float to integer, truncating toward zero; an integer passes through unchanged |
+| `exp` | `( x -- f )` | e^x, as a float |
+| `ln` | `( x -- f )` | Natural logarithm, as a float |
+| `log10` | `( x -- f )` | Base-10 logarithm, as a float |
+| `log2` | `( x -- f )` | Base-2 logarithm, as a float |
+| `pow` | `( x y -- f )` | Two integers stay integer (wrapping; negative exponent is an error); otherwise `powf`, as a float |
+| `floor` | `( x -- y )` | Largest integer value not above `x`, as a float; an integer input is untouched |
+| `ceil` | `( x -- y )` | Smallest integer value not below `x`, as a float; an integer input is untouched |
+| `round` | `( x -- y )` | Nearest integer value (half away from zero), as a float; an integer input is untouched |
+| `trunc` | `( x -- y )` | Integer part of `x`, as a float; an integer input is untouched |
+| `asin` | `( x -- f )` | Arc sine, radians, as a float |
+| `acos` | `( x -- f )` | Arc cosine, radians, as a float |
+| `atan` | `( x -- f )` | Arc tangent, radians, as a float |
+| `atan2` | `( x y -- f )` | Angle of the point `(x, y)`; `y` is on top of the stack |
+| `sinh` | `( x -- f )` | Hyperbolic sine, as a float |
+| `cosh` | `( x -- f )` | Hyperbolic cosine, as a float |
+| `tanh` | `( x -- f )` | Hyperbolic tangent, as a float |
+| `hypot` | `( x y -- f )` | `sqrt(x^2 + y^2)` without intermediate overflow, as a float |
+
+Everything in this table except `int-of` (float to integer) produces float results. Integer inputs are promoted to `f64` first, so `100 log10` gives `2.0`. The rounding words `floor`/`ceil`/`round`/`trunc` are the exception: they only do work on floats and hand integers straight back, so they are safe to sprinkle into integer code.
+
+```forth
+e ln .              \ ln of e, prints 1
+2 10 pow .          \ integer power, prints 1024
+2.0 0.5 pow .       \ float power, prints 1.4142135623730951
+3.7 round .         \ prints 4 (a float)
+3.7 int-of .        \ prints 3 (an integer)
+```
 
 ## Random words
 
@@ -122,11 +158,11 @@ There is no built-in two-argument range word; the usual idiom defines one from `
 | `2drop` | `( a b -- )` | Drop two |
 | `nip` | `( a b -- b )` | Drop second |
 | `tuck` | `( a b -- b a b )` | Copy top under second |
-| `?dup` | `( a -- a a? )` | Duplicate only if nonzero |
+| `?dup` | `( a -- a a? )` | Duplicate only if nonzero (floats count by `!= 0.0`) |
 | `depth` | `( -- n )` | Data stack depth |
 | `pick` | `( x_n ... x_0 u -- ... x_u )` | Copy the item `u` levels down |
 
-`pick` counts from the top with 0, so `0 pick` is a slow `dup`. Negative or out-of-range indexes fail.
+Stack words move values without caring about their kind, so they work on integers and floats alike. `pick` counts from the top with 0, so `0 pick` is a slow `dup`. Negative or out-of-range indexes fail.
 
 ## Return stack words
 
@@ -141,7 +177,7 @@ The return stack is a plain secondary stack. Loop state is kept in a separate lo
 
 ## Comparison words
 
-All produce `-1` or `0`.
+All produce `-1` or `0`. Comparison words are polymorphic: two integers compare exactly, and if either operand is a float both are promoted to `f64` (so integers above 2^53 lose exactness in a mixed comparison). The zero-comparisons (`0=`, `0<>`, `0<`, `0>`, and `not`, which is an alias of `0=`) treat a float as truthy when it is not exactly `0.0`.
 
 | Word | Stack effect | Summary |
 | --- | --- | --- |
@@ -161,8 +197,8 @@ All produce `-1` or `0`.
 
 | Word | Stack effect | Summary |
 | --- | --- | --- |
-| `.` | `( n -- )` | Print integer and newline |
-| `.s` | | Print the whole stack: `<depth> v1 v2 ...` |
+| `.` | `( x -- )` | Print a number (integer or float) and a newline |
+| `.s` | | Print the whole stack: `<depth> v1 v2 ...`, integers and floats alike |
 | `cr` | | Newline |
 | `space` | | One space |
 | `type` | `( handle -- )` | Print a pool string |
@@ -182,7 +218,7 @@ Coordinates are integer pixels. All commands queue; they render after `draw` fin
 | `draw-circle-lines` | `( x y r -- )` | Circle outline |
 | `draw-line` | `( x1 y1 x2 y2 -- )` | Line segment |
 | `draw-text` | `( handle x y size -- )` | Text, top-left corner |
-| `draw-number` | `( n x y size -- )` | An integer rendered as text |
+| `draw-number` | `( n x y size -- )` | A number rendered as text; coordinates and size stay integer-only |
 | `string-length` | `( handle -- n )` | Characters in a pool string |
 | `text-width` | `( handle size -- pixels )` | Approximate width: `chars * size / 2` |
 
@@ -251,7 +287,10 @@ Addresses are indices into one flat `i64` arena, always bounds-checked: `invalid
 | --- | --- |
 | `true` | `-1` |
 | `false` | `0` |
-| `pi` | `3142` |
+| `pi` | `3142` (fixed-point pi) |
+| `e` | `2.718281828459045` (a float) |
+
+Floating-point constants can also be named with `constant`: `1.5 constant half` stores a float half and pushes it back as a float.
 
 ### Key constants
 
@@ -294,7 +333,7 @@ Notes:
 | `: name ... ;` | Define a word |
 | `variable name` | One cell, zero-initialized; `name` pushes its address |
 | `create name` | `name` pushes `here`; allocate separately |
-| `constant name` | Constant from the stack |
+| `constant name` | Integer or float constant from the stack; a float value makes a float constant |
 | `value name` | Like `variable` but `name` pushes the contents |
 | `to name` | `( x -- )` store into a `value` or into a variable at its address |
 | `include "path"` | Load and run another file inline |
@@ -316,7 +355,9 @@ Notes:
 | Error | Typical cause |
 | --- | --- |
 | `stack underflow` | Popped an empty stack |
-| `division by zero` | `/`, `mod`, `/mod`, `f/` with zero |
+| `division by zero` | `/`, `mod`, `/mod` with a zero integer divisor (float `/` follows IEEE semantics instead) |
+| `expected an integer, got a float (convert with int-of)` | A float reached an integer-only word (memory, `mod`, loops, `random`, `emit`, coordinates, `>r`) |
+| `negative exponent in pow (use floats)` | `pow` with two integer operands and a negative exponent |
 | `division overflow` | `i64::MIN / -1` |
 | `unknown word: w` | Misspelling or missing `include` |
 | `invalid address: n` | `@`/`!`/`+!` outside the arena |

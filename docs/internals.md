@@ -27,8 +27,8 @@ This page describes how the GameForth implementation is organized and how to ext
 | --- | --- |
 | `src/main.rs` | CLI parsing, windowed/headless loops, hot reload, input snapshot, rendering |
 | `src/lib.rs` | Exposes the runtime as a library so `main.rs` (and external users) link against it |
-| `src/lexer.rs` | Tokenizer; located tokens, comments, strings, number bases |
-| `src/stack.rs` | The `i64` data stack |
+| `src/lexer.rs` | Tokenizer; located tokens, comments, strings, number bases, float literals |
+| `src/stack.rs` | The data stack of `Value` (integers and floats) |
 | `src/memory.rs` | Flat cell arena |
 | `src/strings.rs` | String pool |
 | `src/input.rs` | Per-frame input snapshot and tracked key list |
@@ -87,17 +87,32 @@ Everything the interpreter needs lives in one `Context` value. Builtins are plai
 ```rust
 enum TokenKind {
     Number(i64),
+    Float(f64),
     Word(String),
     String(String),
 }
 struct Token { kind: TokenKind, location: SourceLocation }
 ```
 
-Tokens keep their file/line/column so every error can point at an exact position.
+Tokens keep their file/line/column so every error can point at an exact position. A token containing a decimal point that parses as `f64` (after the integer parser has had its chance) lexes as `Float`; the decimal point is required, so words like `1e3` or dotted file names stay words.
+
+### `Value` and `Stack` (`src/stack.rs`)
+
+```rust
+enum Value {
+    Int(i64),
+    Float(f64),
+}
+struct Stack { data: Vec<Value> }
+```
+
+Floats are real `f64` values on the stack, never bit-cast into the integer slot. `Stack::pop()` is the strict-integer pop: it removes and returns an `Int`, but deliberately returns `None` without consuming when the top is a `Float`, so the `Context::pop` caller can reject it with an error and the float stays on the stack. `pop_value` pops anything.
 
 ### `Context` (`src/context.rs`)
 
 One struct holding the data stack, `Graphics`, `Memory`, `StringPool`, `InputState`, `TimeState`, `Rng`, and the return stack. Passed mutably to every builtin.
+
+The stack helpers on `Context` split by strictness: `push` takes an integer; `pop`/`pop2` return integers and reject floats with `expected an integer, got a float (convert with int-of)`; `push_value`/`pop_value`/`pop2_values` move any `Value`; `pop_number`/`pop2_numbers` promote to `f64` for polymorphic math (`pop2` style helpers pop the right item first so the pair reads left-to-right).
 
 ### `Dictionary` and `Word` (`src/dictionary.rs`)
 
@@ -106,9 +121,10 @@ enum Word {
     Builtin(fn(&mut Context) -> Result<(), ForthError>),
     UserDefined(Rc<CompiledWord>),
     Color(Color),
-    Address(usize),   // variable / create
+    Address(usize),        // variable / create
     Constant(i64),
-    Value(usize),     // value: index of one cell in the arena
+    FloatConstant(f64),    // e, or a float named with constant
+    Value(usize),          // value: index of one cell in the arena
 }
 ```
 
@@ -134,9 +150,11 @@ Message plus optional `SourceLocation` plus optional call stack. `Display` rende
 
 Execution is a program counter walk over a token slice:
 
-- Numbers push `i64`; strings intern into the pool and push the handle.
+- Numbers push `i64`; float literals push `Value::Float`; strings intern into the pool and push the handle.
 - Control words consume the `ControlMap`: `if` jumps to `else`+1 or `then`+1 on a false flag, `until`/`while`/`repeat`/`loop` jump to their precomputed targets.
 - Everything else is dictionary lookup, dispatching on the `Word` kind.
+
+Polymorphic builtins (`+ - * / negate abs min max 1+ 1- sqrt`, comparisons, `sin`/`cos`/`tan`) match on the pair of `Value`s: two `Int`s take the integer path (wrapping), anything else promotes through `as_float` and pushes a `Float`. `sin_cos_tan` is the special case — an integer keeps the scale-1000 fixed-point contract, a float switches to plain `f64` trig. Rounding words (`floor`/`ceil`/`round`/`trunc`) pass integers through untouched so they are safe to sprinkle into integer code. Memory, `mod`/`/mod`, loops, `random`, `emit`, and coordinates use the strict `pop` and reject floats.
 
 Flow propagation uses an enum:
 
@@ -154,7 +172,7 @@ Each active `do` body gets a `LoopFrame { exec_id, do_index, loop_index, index, 
 
 `:` captures the body tokens, compile-checks them with `compile_control`, and stores an `Rc<CompiledWord>` in the dictionary. Markers like the definition's name token and closing `;` are consumed at definition time. Because bodies are `Rc`s resolved at call time, forward references work naturally.
 
-`variable`, `create`, `constant`, `value`, and `to` are handled inline by the interpreter for the same reason — they need the parser cursor and stack at the same time.
+`variable`, `create`, `constant`, `value`, and `to` are handled inline by the interpreter for the same reason — they need the parser cursor and stack at the same time. `constant` pops a `Value` and dispatches: an integer makes `Word::Constant`, a float makes `Word::FloatConstant`; both push their value back when the name executes. `to` still stores integers only.
 
 ### `to`
 
@@ -246,6 +264,7 @@ Adding a new command is three steps: add the variant, add a `Graphics` method, a
 `cargo test` covers:
 
 - Arithmetic, stack manipulation, and comparison words
+- Float literals and mixed arithmetic, float comparisons and `min`/`max`, the math-function words, float constants named with `constant`, the rejection behavior at integer-only boundaries, and `int-of`
 - Control flow: `if`/`else`/`then`, `begin`/`until`, `while`/`repeat`, `do`/`loop`, `leave`, `exit`, `recurse`
 - Variables, values, constants, `to`, arrays via `create`/`allot`/`,`
 - Fixed-point math
@@ -266,7 +285,7 @@ To add a builtin:
 2. Register it in `Dictionary::new()` (`dict.add("my-word", my_word)`).
 3. Document it in `docs/words.md` with a stack effect.
 
-To add a constant, use `dict.add_constant`; for a color, `dict.add_color`. To add a compiler form, add a match arm in `Interpreter::execute_word_token` and — if it pairs with anything — a field in `ControlMap` and handling in `compile_control`.
+To add a constant, use `dict.add_constant` (integer) or `dict.add_float_constant` (float); for a color, `dict.add_color`. To add a compiler form, add a match arm in `Interpreter::execute_word_token` and — if it pairs with anything — a field in `ControlMap` and handling in `compile_control`.
 
 Inputs for new host capabilities (audio, textures) would follow the input/time pattern: a struct on `Context`, filled in by `main.rs` per frame, read by builtins.
 

@@ -71,13 +71,13 @@ Headless frames use a fixed delta time of 16 ms and a default (empty) input stat
 | Property | Current behavior |
 | --- | --- |
 | Language style | Postfix, stack-based, Forth-like |
-| Number type | Signed 64-bit integer (`i64`) |
-| Fixed point | Scale `1000`, with `fixed`, `int`, `f*`, `f/`, `sin`, `cos`, `tan`, `f-sqrt` |
+| Number type | Signed 64-bit integer (`i64`) and 64-bit float (`f64`) literals like `3.14` |
+| Fixed point | Scale `1000`, with `fixed`, `int`, `f*`, `f/`, `f-sqrt`; integer-only view |
 | Tokenization | Whitespace-separated, each token knows its file/line/column |
 | Case sensitivity | Case-sensitive |
 | Comments | `\ line` and `( block )` |
 | Strings | `"text"` literals, passed around as string-pool handles |
-| Floating point | Not supported |
+| Floating point | First class: literals, promoted arithmetic, and `exp`/`ln`/`pow`/trig/rounding functions |
 | Persistent data | Data stack, return stack, memory arena, dictionary, string pool |
 | Per-frame data | Draw command queue (cleared each frame), input snapshot |
 | Graphics | Filled/outlined rectangles and circles, lines, text |

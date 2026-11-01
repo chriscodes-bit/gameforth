@@ -2,13 +2,15 @@
 
 GameForth is a small Forth-like language for making simple 2D games and animations with Rust and raylib. You write a `.fth` file, the interpreter runs `init` once, then calls `update` and `draw` every frame. Words push numbers onto a stack and queue drawing commands.
 
-It is not ANS Forth and it is not trying to be. It is one interpreter, a stack of `i64`, and a list of draw commands. The goal is a small, stack-based language for making simple 2D things without a lot of setup.
+It is not ANS Forth and it is not trying to be. It is one interpreter, a stack of integers and floats, and a list of draw commands. The goal is a small, stack-based language for making simple 2D things without a lot of setup.
 
 ## Status
 
 Early and still changing. The language currently has:
 
-- signed 64-bit integers, plus fixed-point helpers at a scale of `1000`
+- signed 64-bit integers plus first-class floats (`3.14`), with mixed-type promotion
+- a math-function set: `exp`, `ln`, `log10`, `log2`, `pow`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `hypot`, `floor`, `ceil`, `round`, `trunc`
+- fixed-point helpers at a scale of `1000` for integer-only integer-ish math
 - a full stack vocabulary: `dup`, `drop`, `swap`, `over`, `rot`, `pick`, and return stack words
 - comparisons, `if`/`else`/`then`, `begin`/`until`, `begin`/`while`/`repeat`, `do`/`loop`, `?do`/`+loop`
 - `leave`, `exit`, `recurse`, and loop indexes `i` and `j`
@@ -20,7 +22,7 @@ Early and still changing. The language currently has:
 - modular programs with `include "path"`
 - errors that report file, line, column, and the call stack
 
-There are no floats, textures, sprites, or sound yet.
+There are no textures, sprites, or sound yet.
 
 ## Requirements
 
@@ -87,8 +89,8 @@ The file is loaded once: top-level code runs, then `init` runs once. After that,
 
 | File | What it does |
 | --- | --- |
-| `src/lexer.rs` | Splits source into located tokens: numbers, words, strings, comments |
-| `src/stack.rs` | The `i64` data stack |
+| `src/lexer.rs` | Splits source into located tokens: numbers, floats, words, strings, comments |
+| `src/stack.rs` | The data stack: integers and floats (`Value`) |
 | `src/memory.rs` | Cell arena addressed by integers |
 | `src/strings.rs` | String pool; Forth code sees integer handles |
 | `src/input.rs` | Keyboard and mouse snapshot for the current frame |
@@ -123,11 +125,12 @@ cargo test
 cargo fmt -- --check
 ```
 
-The tests cover the stack and arithmetic words, control flow (`do`/`loop`, `leave`, `while`/`repeat`, `exit`, `recurse`), variables, values and constants, memory arrays, fixed-point math, strings and text commands, comments, the `init`/`update`/`draw` lifecycle, diagnostics with locations and call stacks, and `include` with relative paths and cycle detection. The bounce example is run for 500 frames and checked to stay in bounds.
+The tests cover the stack and arithmetic words, floats and mixed-arithmetic promotion, the math functions, comparisons, control flow (`do`/`loop`, `leave`, `while`/`repeat`, `exit`, `recurse`), variables, values and constants, memory arrays, fixed-point math, strings and text commands, comments, the `init`/`update`/`draw` lifecycle, diagnostics with locations and call stacks, and `include` with relative paths and cycle detection. The bounce example is run for 500 frames and checked to stay in bounds.
 
 ## Known limitations
 
-- No floating-point numbers; fixed-point helpers use an integer scale of `1000`.
+- Floats print with Rust's `{}` formatting (`0.1 0.1 + .` shows `0.2` but also traces like `0.30000000000000004`).
+- Mixed int/float comparisons promote to `f64`, so integers beyond 2^53 lose exactness against floats.
 - `text-width` is approximate (`chars * size / 2`), not measured with the real font.
 - No textures, sprites, or images.
 - No sound.

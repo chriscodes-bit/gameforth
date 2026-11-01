@@ -1,13 +1,14 @@
 use crate::error::{ForthError, SourceLocation};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Number(i64),
+    Float(f64),
     Word(String),
     String(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub location: SourceLocation,
@@ -105,7 +106,10 @@ pub fn tokenize(source: &str, file: &str) -> Result<Vec<Token>, ForthError> {
 
         let kind = match parse_number(&text) {
             Some(number) => TokenKind::Number(number),
-            None => TokenKind::Word(text),
+            None => match parse_float(&text) {
+                Some(float) => TokenKind::Float(float),
+                None => TokenKind::Word(text),
+            },
         };
 
         tokens.push(Token {
@@ -133,6 +137,22 @@ fn parse_number(text: &str) -> Option<i64> {
 
     let value = if negative { -magnitude } else { magnitude };
     i64::try_from(value).ok()
+}
+
+/// A float literal is a token containing a decimal point that parses as
+/// an `f64`: `3.14`, `-2.5`, `2.`, `.5` (after the int parser has had its
+/// chance). The decimal point is required so plain words like `1e3` or
+/// dotted file names stay words, not numbers.
+fn parse_float(text: &str) -> Option<f64> {
+    if !text.contains('.') {
+        return None;
+    }
+
+    if text.chars().any(|character| character == '$') {
+        return None;
+    }
+
+    text.parse::<f64>().ok()
 }
 
 struct Lexer<'a> {
